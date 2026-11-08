@@ -106,10 +106,6 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
   cambio utente, mezzanotte, persistenza, storico a 7 giorni) su SQLite reale.
 - Messaggio di soglia e grafico dello storico disegnati su PNG con Mono e controllati a occhio (`docs/`).
 - L'installer si compila senza avvisi con NSIS 3.09.
-- **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
-  notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
-  Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio).
-  `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura
 
