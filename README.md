@@ -127,5 +127,10 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
     docs/                anteprime
     tests/               collaudo della logica (Mono); render-preview.sh disegna toast e grafico su PNG
 
+## Sviluppo con l'AI
+Questo progetto è stato sviluppato con l'assistenza di Claude (Anthropic): codice, test, script che genera la
+pixel art e installer sono stati scritti insieme a Claude e provati dall'autore. I commit riportano il
+trailer `Co-Authored-By`.
+
 ## Idee per dopo
 Storico a 30 giorni, esportazione CSV, installazione per tutti gli utenti, firma del codice.
