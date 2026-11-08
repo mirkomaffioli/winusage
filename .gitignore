@@ -1,0 +1,10 @@
+# Compilazione e file temporanei
+obj/
+*.pdb
+__pycache__/
+*.pyc
+# Dati dell'utente generati dall'app durante le prove
+usage.db
+usage.db-wal
+usage.db-shm
+winusage.log
