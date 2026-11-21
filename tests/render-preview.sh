@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 OUT=${1:-"$(pwd)/../docs"}
 mkdir -p "$OUT"
 mcs -langversion:5 -r:System.Drawing.dll -out:"$OUT/render.exe" \
-  ../src/Art.cs ../src/Sprites.cs ../src/Core.cs ../src/Db.cs ../src/History.cs RenderPreview.cs
+  ../src/Art.cs ../src/Sprites.cs ../src/Core.cs ../src/Db.cs ../src/History.cs \
+  ../src/NotifyArt.cs ../src/RemoteSprites.cs RenderPreview.cs
 mono "$OUT/render.exe" "$OUT"
 rm -f "$OUT/render.exe"

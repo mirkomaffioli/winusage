@@ -85,8 +85,76 @@ namespace WinUsage.Tests
                 HistoryChart.Draw(cg, new Rectangle(0, 0, cb.Width, cb.Height), h30, f, fb, Color.Black, Color.White);
                 cb.Save(System.IO.Path.Combine(outDir, "history30.png"), ImageFormat.Png);
             }
-            Console.WriteLine("toast.png, history.png e history30.png scritti");
+            RenderRemote(outDir);
+            Console.WriteLine("toast.png, history.png, history30.png e remote-notify.png scritti");
             return 0;
+        }
+
+        /// <summary>Le notifiche pixel art del controllo remoto (testo libero disegnato come farebbe la finestra).</summary>
+        private static void RenderRemote(string outDir)
+        {
+            int scale = 3, pad = 8;
+            NotifyArt[] arts =
+            {
+                Make(NotifyKind.Screenshot, "SCREENSHOT INVIATO", "AL TELEFONO", "ALLE 15:02", null, null, 1),
+                Make(NotifyKind.AppQuery, "IL TELEFONO HA CHIESTO", "L'APP IN USO", "ALLE 15:04", null, null, 1),
+                Make(NotifyKind.ChatMessage, "MESSAGGIO DAL TELEFONO", "", "", "Ciao! A che ora finisci? Ricordati di staccare per cena", "APRI CHAT", 1),
+                Make(NotifyKind.ChatRequest, "IL TELEFONO VUOLE CHATTARE", "CHAT", "", null, "APRI CHAT", 1),
+                Make(NotifyKind.LockedRemote, "BLOCCATO DAL TELEFONO", "ALLE 15:02", "BENTORNATO!", null, null, 1),
+                Make(NotifyKind.Countdown, "SPEGNIMENTO DA REMOTO", "TRA 4:59", "SALVA IL LAVORO!", null, "ANNULLA", 0.98),
+                Make(NotifyKind.Countdown, "SPEGNIMENTO DA REMOTO", "TRA 0:42", "SALVA IL LAVORO!", null, "ANNULLA", 0.14),
+                Make(NotifyKind.Cancelled, "SPEGNIMENTO ANNULLATO", "OSSIGENO OK", "DAL TELEFONO", null, null, 1),
+                Make(NotifyKind.Security, "ATTENZIONE: SICUREZZA", "", "", "Codice dell'Authenticator sbagliato 3 volte dal telefono abbinato. Comandi con codice bloccati per 15 minuti.", null, 1),
+                Make(NotifyKind.Paired, "TELEFONO ABBINATO", "", "", "Mirko (@mirko)", null, 1),
+            };
+            int[] frames = { 4, 9, 7, 7, 6, 6, 9, 6, 6, 6 };
+            int cols = 2, rows = (arts.Length + 1) / cols;
+            int cw = NotifyArt.W * scale, ch = NotifyArt.H * scale;
+            using (Bitmap sheet = new Bitmap(cols * (cw + pad) + pad, rows * (ch + pad) + pad + BadgeArt.H * scale + pad))
+            using (Graphics g = Graphics.FromImage(sheet))
+            {
+                g.Clear(Color.FromArgb(48, 48, 56));
+                ImageAttributes ia = new ImageAttributes();
+                ia.SetColorKey(ToastArt.Key, ToastArt.Key);
+                for (int i = 0; i < arts.Length; i++)
+                {
+                    Rectangle dst = new Rectangle(pad + (i % cols) * (cw + pad), pad + (i / cols) * (ch + pad), cw, ch);
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    g.DrawImage(arts[i].RenderFrame(frames[i]), dst, 0, 0, NotifyArt.W, NotifyArt.H, GraphicsUnit.Pixel, ia);
+                    if (arts[i].FreeText != null)
+                    {
+                        g.PixelOffsetMode = PixelOffsetMode.Default;
+                        g.InterpolationMode = InterpolationMode.Default;
+                        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                        Rectangle a = arts[i].TextArea;
+                        RectangleF r = new RectangleF(dst.X + a.X * scale + 3, dst.Y + a.Y * scale + 2, a.Width * scale - 6, a.Height * scale - 4);
+                        using (Font f = new Font("DejaVu Sans", 6.5f * scale * 0.75f, GraphicsUnit.Point))
+                        using (Brush b = new SolidBrush(Color.FromArgb(234, 248, 255)))
+                            g.DrawString(arts[i].FreeText, f, b, r);
+                    }
+                    arts[i].Dispose();
+                }
+                using (BadgeArt badge = new BadgeArt())
+                {
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    Rectangle dst = new Rectangle(pad, pad + rows * (ch + pad), BadgeArt.W * scale, BadgeArt.H * scale);
+                    g.DrawImage(badge.Render(4 * 60 + 17, 0.86, 0), dst, 0, 0, BadgeArt.W, BadgeArt.H, GraphicsUnit.Pixel, ia);
+                    dst.X += BadgeArt.W * scale + pad;
+                    g.DrawImage(badge.Render(38, 0.12, 0), dst, 0, 0, BadgeArt.W, BadgeArt.H, GraphicsUnit.Pixel, ia);
+                    dst.X += BadgeArt.W * scale + pad;
+                    g.DrawImage(badge.Render(95 * 60, 1, 0), dst, 0, 0, BadgeArt.W, BadgeArt.H, GraphicsUnit.Pixel, ia);
+                }
+                sheet.Save(System.IO.Path.Combine(outDir, "remote-notify.png"), ImageFormat.Png);
+            }
+        }
+
+        private static NotifyArt Make(NotifyKind kind, string title, string big, string line3, string free, string button, double level)
+        {
+            NotifyArt a = new NotifyArt(kind);
+            a.Title = title; a.Big = big; a.Line3 = line3; a.FreeText = free; a.Button = button; a.Level = level;
+            return a;
         }
     }
 }

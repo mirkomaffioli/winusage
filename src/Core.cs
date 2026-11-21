@@ -211,7 +211,20 @@ namespace WinUsage
                            "seconds INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, timer))");
                 db.Execute("CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                            "started_utc TEXT NOT NULL, last_seen_utc TEXT NOT NULL, active_seconds INTEGER NOT NULL DEFAULT 0)");
-                db.Execute("PRAGMA user_version=1");
+                // 1.3: registro dei comandi del controllo remoto (la pulizia dello storico lo riguarda)
+                db.Execute("CREATE TABLE IF NOT EXISTS remote_log(id INTEGER PRIMARY KEY AUTOINCREMENT, ts_utc TEXT NOT NULL, " +
+                           "sender_id INTEGER NOT NULL, command TEXT NOT NULL, result TEXT NOT NULL)");
+                // 1.3: sessione chiusa in modo regolare (per riconoscere uno spegnimento improvviso).
+                // Le sessioni già registrate valgono come chiuse bene, così l'aggiornamento non segnala falsi allarmi.
+                bool hasClean = false;
+                foreach (object[] col in db.Query("PRAGMA table_info(sessions)"))
+                    if (string.Equals(col[1] as string, "ended_clean", StringComparison.OrdinalIgnoreCase)) hasClean = true;
+                if (!hasClean)
+                {
+                    db.Execute("ALTER TABLE sessions ADD COLUMN ended_clean INTEGER NOT NULL DEFAULT 0");
+                    db.Execute("UPDATE sessions SET ended_clean=1");
+                }
+                db.Execute("PRAGMA user_version=2");
             }
             catch (Exception ex)
             {
@@ -312,14 +325,51 @@ namespace WinUsage
             if (db == null || id < 0) return;
             try
             {
-                db.Execute("UPDATE sessions SET last_seen_utc=?, active_seconds=? WHERE id=?", Iso(utcNow), activeSeconds, id);
+                db.Execute("UPDATE sessions SET last_seen_utc=?, active_seconds=?, ended_clean=0 WHERE id=?", Iso(utcNow), activeSeconds, id);
             }
             catch (Exception ex) { Log.Write(ex); }
+        }
+
+        /// <summary>La sessione si è chiusa in modo regolare (uscita o spegnimento): da chiamare dopo l'ultimo salvataggio.</summary>
+        public void MarkSessionClean(long id)
+        {
+            if (db == null || id < 0) return;
+            try { db.Execute("UPDATE sessions SET ended_clean=1 WHERE id=?", id); }
+            catch (Exception ex) { Log.Write(ex); }
+        }
+
+        /// <summary>
+        /// La sessione precedente a <paramref name="currentId"/>: ultimo segnale di vita e se si è chiusa bene.
+        /// Falso se non esiste.
+        /// </summary>
+        public bool PreviousSession(long currentId, out DateTime lastSeenUtc, out bool endedClean)
+        {
+            lastSeenUtc = DateTime.MinValue;
+            endedClean = true;
+            if (db == null) return false;
+            try
+            {
+                List<object[]> r = db.Query("SELECT last_seen_utc, ended_clean FROM sessions WHERE id < ? ORDER BY id DESC LIMIT 1", currentId);
+                if (r.Count == 0) return false;
+                DateTime d;
+                if (DateTime.TryParseExact((string)r[0][0], "yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture,
+                                           DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out d))
+                    lastSeenUtc = d;
+                endedClean = (long)r[0][1] != 0;
+                return true;
+            }
+            catch (Exception ex) { Log.Write(ex); return false; }
         }
 
         public List<object[]> Query(string sql, params object[] args)
         {
             return db == null ? new List<object[]>() : db.Query(sql, args);
+        }
+
+        /// <summary>Esegue un'istruzione senza risultato (nessun effetto se il database non è disponibile).</summary>
+        public void Execute(string sql, params object[] args)
+        {
+            if (db != null) db.Execute(sql, args);
         }
 
         // ---- manutenzione (questi metodi segnalano gli errori con un'eccezione: li mostra la finestra) ----
@@ -400,6 +450,7 @@ namespace WinUsage
             {
                 d.Execute("DELETE FROM usage_daily WHERE day < ?", firstDayToKeep);
                 d.Execute("DELETE FROM sessions WHERE started_utc < ?", firstDayToKeep);
+                d.Execute("DELETE FROM remote_log WHERE ts_utc < ?", firstDayToKeep);
                 d.Execute("COMMIT");
             }
             catch

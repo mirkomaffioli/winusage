@@ -9,6 +9,8 @@ namespace WinUsage
     internal sealed class PopupForm : Form
     {
         private readonly UsageTracker tracker;
+        private readonly Func<bool> chatAvailable;
+        private readonly PixelButton chatButton;
         private readonly Label big;
         private readonly Label[] sessionCells = new Label[TimerIds.Count];
         private readonly Label[] todayCells = new Label[TimerIds.Count];
@@ -22,9 +24,10 @@ namespace WinUsage
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
-        public PopupForm(UsageTracker tracker)
+        public PopupForm(UsageTracker tracker, Func<bool> chatAvailable, Action openChat)
         {
             this.tracker = tracker;
+            this.chatAvailable = chatAvailable;
 
             AutoScaleMode = AutoScaleMode.Font;
             Font = SystemFonts.MessageBoxFont;
@@ -84,6 +87,20 @@ namespace WinUsage
             note.Margin = new Padding(0, 10, 0, 0);
             t.Controls.Add(note, 0, 3 + TimerIds.Count);
             t.SetColumnSpan(note, 3);
+
+            // Chat con il telefono abbinato (solo se il controllo remoto è attivo)
+            chatButton = new PixelButton("CHAT");
+            chatButton.Size = new Size(120, 32);
+            chatButton.Anchor = AnchorStyles.None;
+            chatButton.Margin = new Padding(0, 12, 0, 0);
+            chatButton.BackColor = BackColor;
+            chatButton.Click += delegate
+            {
+                Hide();
+                if (openChat != null) openChat();
+            };
+            t.Controls.Add(chatButton, 0, 4 + TimerIds.Count);
+            t.SetColumnSpan(chatButton, 3);
 
             Controls.Add(t);
 
@@ -148,6 +165,8 @@ namespace WinUsage
 
         private void UpdateValues()
         {
+            bool chat = chatAvailable != null && chatAvailable();
+            if (chatButton.Visible != chat) chatButton.Visible = chat;
             big.Text = Fmt.Clock(tracker.Session(TimerIds.System));
             for (int i = 0; i < TimerIds.Count; i++)
             {

@@ -23,6 +23,10 @@ namespace WinUsage
         private SettingsForm settingsForm;
         private HistoryForm historyForm;
         private MaintenanceForm maintenanceForm;
+        private RemoteSettingsForm remoteForm;
+        private readonly RemoteService remote;
+        private Icon indicatorIcon;
+        private bool sessionEnded;
         private DateTime lastRetentionRun = DateTime.MinValue;
         private DateTime popupHiddenAt = DateTime.MinValue;
         private DateTime lastTooltipUpdate = DateTime.MinValue;
@@ -31,7 +35,7 @@ namespace WinUsage
         private int presentTicks;    // secondi consecutivi in cui le sonde dicono che lo schermo è sbloccato
         private readonly Control invoker = new Control();   // per rientrare nel thread dell'interfaccia
 
-        public TrayContext(string dbPath)
+        public TrayContext(string dbPath, bool autostart)
         {
             storage = new Storage(dbPath);
 
@@ -60,6 +64,8 @@ namespace WinUsage
             miMaintenance.Click += delegate { ShowMaintenance(); };
             ToolStripMenuItem miSettings = new ToolStripMenuItem("Configurazione...");
             miSettings.Click += delegate { ShowSettings(); };
+            ToolStripMenuItem miRemote = new ToolStripMenuItem("Controllo remoto (Telegram)...");
+            miRemote.Click += delegate { ShowRemoteSettings(); };
             ToolStripMenuItem miTest = new ToolStripMenuItem("Mostra messaggio di prova");
             miTest.Click += delegate { ShowToast(tracker.Session(TimerIds.System), false); };
             ToolStripMenuItem miExit = new ToolStripMenuItem("Esci");
@@ -68,6 +74,7 @@ namespace WinUsage
             menu.Items.Add(miHistory30);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miSettings);
+            menu.Items.Add(miRemote);
             menu.Items.Add(miMaintenance);
             menu.Items.Add(miTest);
             menu.Items.Add(new ToolStripSeparator());
@@ -80,6 +87,12 @@ namespace WinUsage
             notifyIcon.MouseMove += delegate { UpdateTooltip(); };
             UpdateTooltip(true);
             notifyIcon.Visible = true;
+
+            // Controllo remoto via Telegram (spento finché non viene configurato)
+            remote = new RemoteService(storage, tracker, invoker, autostart, icon);
+            remote.StateChanged += OnRemoteStateChanged;
+            remote.Start();
+            UpdateTrayIcon();
 
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
             SystemEvents.SessionSwitch += OnSessionSwitch;
@@ -141,6 +154,9 @@ namespace WinUsage
                 if (toastPending) TryShowPendingToast();
 
                 if ((now - lastRetentionRun).TotalHours >= 6) ApplyRetention();
+
+                remote.Tick(now);
+                NotifyCenter.Pump();
             }
             catch (Exception ex)
             {
@@ -222,7 +238,7 @@ namespace WinUsage
 
             if (popup == null || popup.IsDisposed)
             {
-                popup = new PopupForm(tracker);
+                popup = new PopupForm(tracker, delegate { return remote.ChatAvailable; }, remote.OpenChatFromPc);
                 popup.VisibleChanged += delegate { if (!popup.Visible) popupHiddenAt = DateTime.UtcNow; };
             }
             popup.ShowNearTray();
@@ -282,6 +298,62 @@ namespace WinUsage
             catch (Exception ex) { Log.Write(ex); }
         }
 
+        // ---- controllo remoto ----
+
+        private void ShowRemoteSettings()
+        {
+            if (remoteForm != null && !remoteForm.IsDisposed)
+            {
+                if (remoteForm.WindowState == FormWindowState.Minimized) remoteForm.WindowState = FormWindowState.Normal;
+                remoteForm.Activate();
+                return;
+            }
+            remoteForm = new RemoteSettingsForm(remote, icon);
+            remoteForm.Show();
+        }
+
+        private void OnRemoteStateChanged()
+        {
+            UpdateTrayIcon();
+            if (remoteForm != null && !remoteForm.IsDisposed) remoteForm.RefreshState();
+        }
+
+        /// <summary>Con il controllo remoto attivo l'icona ha un pallino verde (disattivabile in Controllo remoto).</summary>
+        private void UpdateTrayIcon()
+        {
+            try
+            {
+                if (!remote.ShowIndicator) { notifyIcon.Icon = icon; return; }
+                if (indicatorIcon == null) indicatorIcon = BuildIndicatorIcon(icon);
+                notifyIcon.Icon = indicatorIcon;
+            }
+            catch (Exception ex) { Log.Write(ex); }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool DestroyIcon(IntPtr handle);
+
+        private static Icon BuildIndicatorIcon(Icon baseIcon)
+        {
+            using (Bitmap b = baseIcon.ToBitmap())
+            {
+                using (Graphics g = Graphics.FromImage(b))
+                {
+                    int d = Math.Max(5, b.Width * 7 / 16);
+                    int x = b.Width - d, y = b.Height - d;
+                    using (Brush navy = new SolidBrush(Color.FromArgb(11, 29, 58)))
+                    using (Brush green = new SolidBrush(Color.FromArgb(46, 204, 113)))
+                    {
+                        g.FillRectangle(navy, x, y, d, d);
+                        g.FillRectangle(green, x + 1, y + 1, d - 2, d - 2);
+                    }
+                }
+                IntPtr h = b.GetHicon();
+                try { using (Icon tmp = Icon.FromHandle(h)) return (Icon)tmp.Clone(); }
+                finally { DestroyIcon(h); }
+            }
+        }
+
         private void ShowSettings()
         {
             if (settingsForm != null && !settingsForm.IsDisposed)
@@ -310,8 +382,8 @@ namespace WinUsage
         {
             try
             {
-                if (e.Mode == PowerModes.Suspend) tracker.NotifySuspend(DateTime.UtcNow);
-                else if (e.Mode == PowerModes.Resume) tracker.NotifyResume(DateTime.UtcNow);
+                if (e.Mode == PowerModes.Suspend) { tracker.NotifySuspend(DateTime.UtcNow); remote.OnSuspend(); }
+                else if (e.Mode == PowerModes.Resume) { tracker.NotifyResume(DateTime.UtcNow); remote.OnResume(); }
             }
             catch (Exception ex) { Log.Write(ex); }
         }
@@ -328,18 +400,22 @@ namespace WinUsage
                     case SessionSwitchReason.SessionLock:
                         presentTicks = 0;
                         tracker.SetPauseReason(UsageTracker.PauseLocked, true, now);
+                        remote.OnLock();
                         break;
                     case SessionSwitchReason.SessionUnlock:
                         tracker.SetPauseReason(UsageTracker.PauseLocked, false, now);
+                        remote.OnUnlock();
                         break;
                     case SessionSwitchReason.ConsoleDisconnect:
                     case SessionSwitchReason.RemoteDisconnect:
                         presentTicks = 0;
                         tracker.SetPauseReason(UsageTracker.PauseDisconnected, true, now);
+                        remote.OnDisconnect();
                         break;
                     case SessionSwitchReason.ConsoleConnect:
                     case SessionSwitchReason.RemoteConnect:
                         tracker.SetPauseReason(UsageTracker.PauseDisconnected, false, now);
+                        remote.OnConnect();
                         break;
                 }
                 Log.Write("Sessione: " + e.Reason + (tracker.Paused ? " (conteggio in pausa)" : " (conteggio attivo)"));
@@ -349,7 +425,14 @@ namespace WinUsage
 
         private void OnSessionEnding(object sender, SessionEndingEventArgs e)
         {
-            try { tracker.Shutdown(DateTime.UtcNow); } catch (Exception ex) { Log.Write(ex); }
+            try
+            {
+                sessionEnded = true;
+                tracker.Shutdown(DateTime.UtcNow);
+                storage.MarkSessionClean(tracker.SessionId);
+                remote.OnSessionEnding(e.Reason == SessionEndReasons.Logoff);
+            }
+            catch (Exception ex) { Log.Write(ex); }
         }
 
         // ---- uscita ----
@@ -380,7 +463,12 @@ namespace WinUsage
                 SystemEvents.SessionSwitch -= OnSessionSwitch;
                 SystemEvents.SessionEnding -= OnSessionEnding;
                 timer.Stop();
+                if (!sessionEnded) remote.OnAppExit();   // chiusura dell'app, non del PC
                 tracker.Shutdown(DateTime.UtcNow);
+                storage.MarkSessionClean(tracker.SessionId);
+                remote.Dispose();
+                NotifyCenter.CloseAll();
+                if (remoteForm != null && !remoteForm.IsDisposed) remoteForm.Dispose();
                 notifyIcon.Visible = false;   // evita l'icona "fantasma" nella tray
                 notifyIcon.Dispose();
                 if (popup != null && !popup.IsDisposed) popup.Dispose();

@@ -45,7 +45,11 @@ namespace WinUsage
 
                 using (EventWaitHandle quit = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEventName))
                 {
-                    TrayContext context = new TrayContext(Path.Combine(dir, "usage.db"));
+                    bool autostart = Array.Exists(args, delegate(string a)
+                    {
+                        return string.Equals(a, AutoStart.Argument, StringComparison.OrdinalIgnoreCase);
+                    });
+                    TrayContext context = new TrayContext(Path.Combine(dir, "usage.db"), autostart);
                     RegisteredWaitHandle wait = ThreadPool.RegisterWaitForSingleObject(
                         quit, delegate(object state, bool timedOut) { context.RequestQuit(); }, null, Timeout.Infinite, true);
                     Application.Run(context);

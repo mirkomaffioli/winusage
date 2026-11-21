@@ -1,7 +1,9 @@
-# WinUsage 1.2
+# WinUsage 1.3
 
 Piccola utility per Windows 11 che vive nella tray e misura da quanto tempo stai usando il computer
 (standby e schermo bloccato esclusi), con storico in SQLite separato per ogni utente. Grafica in pixel art a tema subacqueo.
+Dalla 1.3 si può controllare dal telefono con un bot Telegram: screenshot, app in uso, chat, blocco, spegnimento
+e messaggi di accensione/spegnimento.
 
 ![Messaggio di soglia](docs/toast.png)
 
@@ -9,8 +11,8 @@ Piccola utility per Windows 11 che vive nella tray e misura da quanto tempo stai
 
 | Azione | Effetto |
 |---|---|
-| **Tasto sinistro** sull'icona | Popup con il tempo di utilizzo dall'avvio e i totali di oggi (Sistema, Browser, Steam) |
-| **Tasto destro** sull'icona | Menu: **Storico 7 giorni...** / **Storico 30 giorni...** / **Configurazione...** / **Manutenzione database...** / **Mostra messaggio di prova** / **Esci** |
+| **Tasto sinistro** sull'icona | Popup con il tempo di utilizzo dall'avvio e i totali di oggi (Sistema, Browser, Steam); con il controllo remoto attivo, pulsante **CHAT** |
+| **Tasto destro** sull'icona | Menu: **Storico 7 giorni...** / **Storico 30 giorni...** / **Configurazione...** / **Controllo remoto (Telegram)...** / **Manutenzione database...** / **Mostra messaggio di prova** / **Esci** |
 | Passaggio del mouse | Tooltip "WinUsage - in uso da 1 ora e 30 minuti" |
 | Soglia raggiunta | Messaggio in pixel art "Stai usando il computer da 2 ORE 30 MIN" (ogni N minuti, configurabile o disattivabile) |
 
@@ -59,6 +61,74 @@ Dal menu del tasto destro, **Manutenzione database...**:
 
 Prima di ogni operazione i secondi ancora in memoria vengono scritti nel database.
 
+### Controllo remoto via Telegram (1.3)
+Dal menu del tasto destro, **Controllo remoto (Telegram)...**. Spento finché non lo configuri; il PC fa solo
+connessioni HTTPS in uscita verso `api.telegram.org` (nessuna porta aperta, nessuna DLL in più).
+
+**Configurazione in tre passi**
+1. In Telegram apri @BotFather, `/newbot`, copia il token nella scheda *Collegamento* e premi *Verifica*.
+   Usa un bot diverso per ogni PC e per ogni utente; consigliato `/setjoingroups` → Disable.
+2. *Avvia abbinamento*: compare un codice di 8 caratteri valido 5 minuti. Scrivi al bot `/abbina CODICE`:
+   il PC chiede conferma con un clic prima di accettare. Da quel momento il bot ascolta solo il tuo account
+   e ignora tutti gli altri senza rispondere.
+3. Scheda *Codice*: *Genera nuovo segreto*, inquadra il QR con un'app Authenticator e verifica un codice.
+
+**Comandi**
+
+| Comando | Effetto | Codice |
+|---|---|---|
+| `/stato` | Tempi di utilizzo di oggi e dall'avvio | no |
+| `/app` | Applicazione in primo piano e da quanto, ultimo input, gioco Steam, schermo intero. Mai il titolo della finestra | no |
+| `/screenshot [n] [hd]` | Cattura di tutti i monitor (o del monitor n); `hd` = PNG originale | no |
+| `/chat` | Notifica sul PC con *APRI CHAT* | no |
+| `/blocca CODICE` | Blocca il PC (Win+L); allo sblocco compare "bloccato dal telefono" | sì |
+| `/spegni CODICE [minuti]` | Spegnimento dopo un conto alla rovescia (5 minuti di default, da 1 a 120) | sì |
+| `/annulla` | Ferma lo spegnimento | mai |
+| `/sblocca CODICE` | Per 15 minuti `/blocca` e `/spegni` non chiedono il codice | — |
+| `/stop` | Disattiva il controllo remoto (si riattiva solo dal PC) | no |
+| testo senza `/` | Va nella chat del PC | no |
+
+Quali comandi chiedono il codice si sceglie nella scheda *Comandi*.
+
+**Chat**: dal pulsante *CHAT* del popup o con `/chat` dal telefono. Destinatario fisso (il telefono abbinato),
+nessuna cronologia: i messaggi stanno solo in memoria e spariscono alla chiusura. Un messaggio arrivato a chat
+chiusa compare come notifica con *APRI CHAT*.
+
+**Spegnimento**: sul PC compare la bombola d'ossigeno che si svuota con *ANNULLA*, poi un piccolo indicatore fisso
+nell'angolo, poi di nuovo grande nell'ultimo minuto. Si annulla dal PC o con `/annulla`, e l'altro lato viene
+avvisato. Lo spegnimento non è forzato: un documento non salvato lo ferma (e il telefono lo viene a sapere). Se il
+PC va in standby durante il conto alla rovescia, lo spegnimento viene annullato.
+
+**Messaggi al telefono**: accensione (cioè l'accesso a Windows; "WinUsage avviato" se l'app parte a mano),
+spegnimento/riavvio/disconnessione con i totali del giorno, chiusura di WinUsage, spegnimento improvviso (corrente,
+blocco: riconosciuto al riavvio dall'ultimo segnale salvato). Standby e blocco schermo si possono attivare. Se allo
+spegnimento la rete non c'è più, il messaggio parte al riavvio con l'indicazione "notificato in ritardo".
+
+**Notifiche sul PC in pixel art**, tutte disattivabili tranne gli avvisi di sicurezza: screenshot inviato,
+app in uso richiesta, messaggio dal telefono, bloccato da remoto, conto alla rovescia, spegnimento annullato,
+abbinamento riuscito, avvisi di sicurezza (restano finché non si clicca). Con il controllo remoto attivo l'icona
+nella tray ha un pallino verde.
+
+![Notifiche del controllo remoto](docs/remote-notify.png)
+
+**Sicurezza** (analisi completa nel documento di design del progetto):
+- comandi eseguiti solo se Telegram li attribuisce all'account abbinato; ignorati gruppi, messaggi inoltrati,
+  modificati, didascalie e messaggi via bot;
+- comandi più vecchi di 2 minuti scartati (Telegram conserva i messaggi a PC spento), confrontando con l'ora del
+  server Telegram e non con l'orologio del PC;
+- codice TOTP monouso, 3 errori = comandi con codice bloccati per 15 minuti; limite di 20 comandi al minuto e di uno
+  screenshot ogni 10 secondi;
+- token, utente abbinato, segreto e regole in un unico blocco cifrato con DPAPI: se qualcuno lo modifica nel
+  database il controllo remoto si spegne invece di obbedire a un altro account;
+- il token non finisce mai nel log; un secondo programma che usa lo stesso token o un webhook impostato producono
+  un avviso ("possibile token compromesso");
+- screenshot solo in memoria, cancellati dalla chat dopo 10 minuti, mai con un gestore di password in primo piano;
+- registro di ogni comando (anche rifiutato) nella scheda *Registro*, senza i codici.
+
+Limiti da sapere: i bot di Telegram non hanno cifratura end-to-end, quindi Telegram può leggere comandi,
+screenshot e orari; chi controlla il tuo account Telegram può vedere il tuo schermo (attiva la verifica in due
+passaggi). Se perdi il telefono: @BotFather → `/revoke`. Se il PC lo usano altre persone, avvisale.
+
 ### Configurazione
 - Avvio automatico con Windows (attivo di default)
 - Notifica a intervalli regolari: attiva/disattiva e ogni quanti minuti (default 60)
@@ -67,7 +137,7 @@ Prima di ogni operazione i secondi ancora in memoria vengono scritti nel databas
 
 ## Installare
 
-`dist\WinUsage-Setup-1.2.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.3.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -89,7 +159,7 @@ Per rigenerare l'installer: `build-installer.bat` (Windows, richiede NSIS) oppur
 
     bash build-mono.sh
 
-Risultato: `bin\WinUsage.exe` (circa 100 KB, richiede .NET Framework 4.8, già presente in Windows 11).
+Risultato: `bin\WinUsage.exe` (circa 350 KB con l'icona, richiede .NET Framework 4.8, già presente in Windows 11).
 Copialo dove vuoi e avvialo: al primo avvio si registra per l'avvio automatico.
 Se sposti l'exe, al lancio successivo l'avvio automatico viene riallineato al nuovo percorso.
 
@@ -109,8 +179,11 @@ Se sposti l'exe, al lancio successivo l'avvio automatico viene riallineato al nu
   `%LOCALAPPDATA%\WinUsage\usage.db` (profilo di ciascun utente), l'avvio automatico è in `HKCU\...\Run`.
   Non servono privilegi di amministratore. Ogni utente che vuole la misura deve avviare l'app una volta.
 - **SQLite**: usa `winsqlite3.dll`, la libreria SQLite già inclusa in Windows 10/11, quindi nessuna DLL o
-  pacchetto da distribuire. Tabelle: `settings` (anche `retention_days`), `usage_daily(day, timer, seconds)`, `sessions(id, started_utc,
-  last_seen_utc, active_seconds)`. Salvataggio ogni 30 secondi, prima dello standby e all'uscita/spegnimento.
+  pacchetto da distribuire. Tabelle: `settings` (anche `retention_days` e le impostazioni `remote_*`),
+  `usage_daily(day, timer, seconds)`, `sessions(id, started_utc, last_seen_utc, active_seconds, ended_clean)`,
+  e per il controllo remoto `remote_outbox` (messaggi in attesa), `remote_log` (registro dei comandi, incluso
+  nella pulizia dello storico) e `remote_delete` (screenshot da cancellare dalla chat). Salvataggio ogni 30 secondi,
+  prima dello standby e all'uscita/spegnimento.
 - Log di eventuali errori: `%LOCALAPPDATA%\WinUsage\winusage.log`.
 
 ## I tre timer: è possibile? Sì
@@ -127,14 +200,25 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 
 - Compilato senza errori né avvisi con `mcs -langversion:5`, cioè con il sottoinsieme di C# del compilatore
   integrato in Windows.
-- `tests/run-tests.sh`: 95 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
+- `tests/run-tests.sh`: 223 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
   cambio utente, mezzanotte, persistenza, storico a 7 e 30 giorni, manutenzione: informazioni, verifica, pulizia,
-  compattazione, backup, CSV, azzeramento, conservazione) su SQLite reale.
-- Messaggio di soglia e grafico dello storico disegnati su PNG con Mono e controllati a occhio (`docs/`).
+  compattazione, backup, CSV, azzeramento, conservazione) su SQLite reale. Dalla 1.3 anche il controllo remoto:
+  TOTP con i vettori della RFC 6238, Base32, QR, configurazione cifrata e alterata, coda in uscita, spegnimento
+  improvviso e aggiornamento dalla 1.2, lettura degli update di Telegram, abbinamento (codice scaduto, tentativi,
+  conferma negata), mittenti e messaggi ignorati, comandi scaduti, codici giusti/errati/riusati, blocco dopo 3
+  errori, sessione /sblocca, minuti di /spegni, limiti di frequenza, conto alla rovescia e standby.
+- Controllo remoto provato da capo a fondo con Mono contro un server Telegram finto (lettura dei messaggi, risposte,
+  screenshot inviato in multipart, messaggi di accensione, spegnimento improvviso e spegnimento). Il QR mostrato
+  nella finestra *Controllo remoto* è stato decodificato con OpenCV.
+- Messaggio di soglia, notifiche del controllo remoto e grafico dello storico disegnati su PNG con Mono e controllati
+  a occhio (`docs/`).
 - L'installer si compila senza avvisi con NSIS 3.09.
 - **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
   notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
-  Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio).
+  Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio) e,
+  per il controllo remoto, per DPAPI, TLS verso Telegram reale, `LockWorkStation`, `ExitWindowsEx`, cattura dello
+  schermo con DPI diversi tra i monitor (l'app è DPI-aware di sistema: con monitor a scale diverse lo screenshot
+  potrebbe risultare tagliato), finestre di chat e notifiche.
   `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura
@@ -153,10 +237,20 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
     src/TrayContext.cs   icona nella tray, menu, notifiche, eventi di sistema
     src/PopupForm.cs     popup del tasto sinistro
     src/SettingsForm.cs  finestra di configurazione
+    src/RemoteCore.cs    controllo remoto: TOTP, configurazione cifrata, coda, regole di sicurezza (RemoteController)
+    src/Telegram.cs      client minimo della Bot API (HTTPS, JSON del framework)
+    src/Qr.cs            generatore di QR code (per l'app Authenticator)
+    src/RemoteService.cs collega controller, rete (2 thread), azioni, notifiche, chat; messaggi di accensione/spegnimento
+    src/RemoteActions.cs app in uso, screenshot, blocco, spegnimento (API di Windows)
+    src/NotifyArt.cs     notifiche e badge del conto alla rovescia in pixel art
+    src/NotifyForm.cs    finestre delle notifiche, coda con priorità, badge
+    src/RemoteSprites.cs sprite 16x16 delle notifiche
+    src/RemoteChatForm.cs finestra di chat e pulsante pixel art
+    src/RemoteSettingsForm.cs finestra "Controllo remoto"
     tools/make_art.py    genera icona, sprite e immagini dell'installer (Pillow)
     installer/           script NSIS e immagini
     docs/                anteprime
-    tests/               collaudo della logica (Mono); render-preview.sh disegna toast e grafico su PNG
+    tests/               collaudo della logica (Mono); render-preview.sh disegna toast, notifiche e grafico su PNG
 
 ## Sviluppo con l'AI
 Questo progetto è stato sviluppato con l'assistenza di Claude (Anthropic): codice, test, script che genera la
@@ -164,4 +258,5 @@ pixel art e installer sono stati scritti insieme a Claude e provati dall'autore.
 trailer `Co-Authored-By`.
 
 ## Idee per dopo
-Ripristino da un backup, installazione per tutti gli utenti, firma del codice.
+Ripristino da un backup, installazione per tutti gli utenti, firma del codice. Controllo remoto: `/riavvia`,
+`/sospendi`, `/muto`, `/chiudi <app>`, `/stato` come immagine pixel art, inoltro dei messaggi di soglia.
