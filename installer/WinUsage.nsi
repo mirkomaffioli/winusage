@@ -6,7 +6,7 @@
 Unicode true
 
 !define APPNAME   "WinUsage"
-!define VERSION   "1.1.0"
+!define VERSION   "1.1.1"
 !define EXENAME   "WinUsage.exe"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinUsage"
 !define RUNKEY    "Software\Microsoft\Windows\CurrentVersion\Run"

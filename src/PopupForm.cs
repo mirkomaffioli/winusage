@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace WinUsage
@@ -12,6 +13,14 @@ namespace WinUsage
         private readonly Label[] sessionCells = new Label[TimerIds.Count];
         private readonly Label[] todayCells = new Label[TimerIds.Count];
         private readonly Timer refresh;
+        private readonly Timer watch;
+        private DateTime shownAt = DateTime.MinValue;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         public PopupForm(UsageTracker tracker)
         {
@@ -82,11 +91,38 @@ namespace WinUsage
             refresh.Interval = 1000;
             refresh.Tick += delegate { UpdateValues(); };
 
-            Deactivate += delegate { Hide(); };
+            // Chiusura quando si clicca altrove. Su Windows 11, se l'icona è nell'area delle icone nascoste (la
+            // freccia ^ della tray), quel pannello si richiude subito dopo il clic e porta via il focus al popup:
+            // nei primi istanti la perdita del focus si ignora e il popup si riprende il primo piano.
+            Deactivate += delegate
+            {
+                if ((DateTime.UtcNow - shownAt).TotalMilliseconds < 800)
+                {
+                    BeginInvoke(new MethodInvoker(BringToForeground));
+                    return;
+                }
+                Hide();
+            };
+
+            // Rete di sicurezza: se Windows non concede il primo piano, Deactivate non arriva mai.
+            // Si chiude comunque al primo clic fuori dal popup.
+            watch = new Timer();
+            watch.Interval = 100;
+            watch.Tick += delegate
+            {
+                if (!Visible || (DateTime.UtcNow - shownAt).TotalMilliseconds < 800) return;
+                if (GetForegroundWindow() != Handle && Control.MouseButtons != MouseButtons.None &&
+                    !Bounds.Contains(Cursor.Position))
+                    Hide();
+            };
+
+            KeyPreview = true;
+            KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) Hide(); };
+
             VisibleChanged += delegate
             {
-                if (Visible) { UpdateValues(); refresh.Start(); }
-                else refresh.Stop();
+                if (Visible) { UpdateValues(); refresh.Start(); watch.Start(); }
+                else { refresh.Stop(); watch.Stop(); }
             };
         }
 
@@ -126,9 +162,17 @@ namespace WinUsage
             UpdateValues();
             Screen screen = Screen.FromPoint(Cursor.Position);
             Rectangle wa = screen.WorkingArea;
+            shownAt = DateTime.UtcNow;
             Show();
             PerformLayout();
             Location = new Point(wa.Right - Width - 12, wa.Bottom - Height - 12);
+            BringToForeground();
+        }
+
+        private void BringToForeground()
+        {
+            if (!Visible || IsDisposed) return;
+            SetForegroundWindow(Handle);
             Activate();
         }
 
@@ -146,6 +190,7 @@ namespace WinUsage
         protected override void Dispose(bool disposing)
         {
             if (disposing && refresh != null) refresh.Dispose();
+            if (disposing && watch != null) watch.Dispose();
             base.Dispose(disposing);
         }
     }

@@ -1,7 +1,7 @@
-# WinUsage 1.1
+# WinUsage 1.1.1
 
 Piccola utility per Windows 11 che vive nella tray e misura da quanto tempo stai usando il computer
-(standby escluso), con storico in SQLite separato per ogni utente. Grafica in pixel art a tema subacqueo.
+(standby e schermo bloccato esclusi), con storico in SQLite separato per ogni utente. Grafica in pixel art a tema subacqueo.
 
 ![Messaggio di soglia](docs/toast.png)
 
@@ -10,7 +10,7 @@ Piccola utility per Windows 11 che vive nella tray e misura da quanto tempo stai
 | Azione | Effetto |
 |---|---|
 | **Tasto sinistro** sull'icona | Popup con il tempo di utilizzo dall'avvio e i totali di oggi (Sistema, Browser, Steam) |
-| **Tasto destro** sull'icona | Menu: **Storico 7 giorni...** / **Configurazione...** / **Esci** |
+| **Tasto destro** sull'icona | Menu: **Storico 7 giorni...** / **Configurazione...** / **Mostra messaggio di prova** / **Esci** |
 | Passaggio del mouse | Tooltip "WinUsage - in uso da 1 ora e 30 minuti" |
 | Soglia raggiunta | Messaggio in pixel art "Stai usando il computer da 2 ORE 30 MIN" (ogni N minuti, configurabile o disattivabile) |
 
@@ -18,7 +18,7 @@ Piccola utility per Windows 11 che vive nella tray e misura da quanto tempo stai
 Una finestrella animata (10 fotogrammi al secondo) in basso a destra: fondale a bande, elmo da palombaro con un
 orologio nel vetro che dondola, bolle che salgono, un pesce che nuota, alghe che ondeggiano. Il testo è disegnato
 con un font bitmap 5x7. Non ruba il focus, sparisce da sola dopo circa 11 secondi o con un clic. Se per qualche
-motivo non si può mostrare, ripiega sulla normale notifica di Windows.
+motivo non si può vedere, resta comunque la normale notifica di Windows, mostrata insieme.
 Tutta la grafica è originale: ispirata al tema (immersioni, oceano, ossigeno che finisce) senza usare personaggi
 o elementi del gioco.
 
@@ -46,7 +46,7 @@ totale dei 7 giorni e la media giornaliera. I valori di oggi si aggiornano ogni 
 
 ## Installare
 
-`dist\WinUsage-Setup-1.1.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.1.1.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -78,6 +78,10 @@ Se sposti l'exe, al lancio successivo l'avvio automatico viene riallineato al nu
   Un tick al secondo; se tra due tick passano più di 5 secondi il PC era in standby/ibernazione
   (o è stato cambiato l'orologio) e quell'intervallo **non viene contato**. Sugli eventi di alimentazione
   Suspend/Resume i dati vengono salvati e il riferimento temporale azzerato.
+- **Schermo bloccato**: con Win+L, il blocco automatico o il salvaschermo il conteggio si ferma e riprende allo
+  sblocco. Oltre agli eventi di sessione di Windows, ogni secondo l'app controlla se il desktop che riceve l'input
+  è quello della schermata di blocco, così il conteggio non resta acceso se un evento va perso. Se la soglia
+  scatta in quel momento, il messaggio viene mostrato allo sblocco.
 - **Cambio utente rapido**: quando la sessione viene disconnessa il conteggio si ferma, perché in quel momento
   il PC lo sta usando un altro utente.
 - **Per utente**: l'app è per-utente. Database e configurazione sono in
@@ -92,7 +96,7 @@ Se sposti l'exe, al lancio successivo l'avvio automatico viene riallineato al nu
 
 | Timer | Come viene misurato | Precisione / limiti |
 |---|---|---|
-| **Sistema** | Tempo con PC acceso e sessione attiva, standby escluso | Conta dall'avvio dell'app. Se la avvii a mano dopo ore dall'accensione, parte da zero. Con "Avvio rapido" di Windows lo spegnimento è un'ibernazione del kernel, ma ogni accesso riavvia l'app, quindi la sessione riparte comunque da zero |
+| **Sistema** | Tempo con PC acceso e sessione attiva, standby e schermo bloccato esclusi | Conta dall'avvio dell'app. Se la avvii a mano dopo ore dall'accensione, parte da zero. Con "Avvio rapido" di Windows lo spegnimento è un'ibernazione del kernel, ma ogni accesso riavvia l'app, quindi la sessione riparte comunque da zero |
 | **Browser** | Secondi in cui la finestra in **primo piano** appartiene a un processo browser (chrome, msedge, firefox, brave, opera, vivaldi... lista modificabile) | Non conta le schede in background, ma conta una pagina rimasta in primo piano mentre sei lontano dal PC (es. un video) |
 | **Steam** | Secondi in cui Steam ha un **gioco in esecuzione** (valore `RunningAppID` nel registro dell'utente, verificato con la presenza di `steam.exe`) oppure il client Steam è in primo piano | Conta il gioco anche se la sua finestra non è in primo piano; non distingue quale gioco |
 
@@ -102,10 +106,14 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 
 - Compilato senza errori né avvisi con `mcs -langversion:5`, cioè con il sottoinsieme di C# del compilatore
   integrato in Windows.
-- `tests/run-tests.sh`: 52 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi,
+- `tests/run-tests.sh`: 59 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
   cambio utente, mezzanotte, persistenza, storico a 7 giorni) su SQLite reale.
 - Messaggio di soglia e grafico dello storico disegnati su PNG con Mono e controllati a occhio (`docs/`).
 - L'installer si compila senza avvisi con NSIS 3.09.
+- **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
+  notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
+  Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio).
+  `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura
 

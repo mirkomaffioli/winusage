@@ -25,7 +25,8 @@ namespace WinUsage
         private DateTime popupHiddenAt = DateTime.MinValue;
         private DateTime lastTooltipUpdate = DateTime.MinValue;
         private bool exiting;
-        private bool toastPending;   // soglia raggiunta durante lo schermo intero, messaggio rimandato
+        private bool toastPending;   // soglia raggiunta mentre il messaggio non si poteva vedere: rimandato
+        private int presentTicks;    // secondi consecutivi in cui le sonde dicono che lo schermo è sbloccato
         private readonly Control invoker = new Control();   // per rientrare nel thread dell'interfaccia
 
         public TrayContext(string dbPath)
@@ -53,10 +54,13 @@ namespace WinUsage
             miHistory.Click += delegate { ShowHistory(); };
             ToolStripMenuItem miSettings = new ToolStripMenuItem("Configurazione...");
             miSettings.Click += delegate { ShowSettings(); };
+            ToolStripMenuItem miTest = new ToolStripMenuItem("Mostra messaggio di prova");
+            miTest.Click += delegate { ShowToast(tracker.Session(TimerIds.System), false); };
             ToolStripMenuItem miExit = new ToolStripMenuItem("Esci");
             miExit.Click += delegate { ExitApp(); };
             menu.Items.Add(miHistory);
             menu.Items.Add(miSettings);
+            menu.Items.Add(miTest);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miExit);
 
@@ -103,17 +107,27 @@ namespace WinUsage
         {
             try
             {
+                DateTime now = DateTime.UtcNow;
+
+                // Schermo bloccato o salvaschermo: controllo a ogni secondo, in aggiunta agli eventi di sessione
+                // (che arrivano subito ma che, se persi, lascerebbero il conteggio acceso o spento per sempre).
+                bool away = Probe.UserAway();
+                tracker.SetPauseReason(UsageTracker.PauseAway, away, now);
+                presentTicks = away ? 0 : presentTicks + 1;
+                if (presentTicks == 5 && tracker.Paused && !away)
+                {
+                    // Lo schermo risulta sbloccato da 5 secondi ma non è arrivato l'evento di sblocco/riconnessione.
+                    Log.Write("Evento di sblocco non ricevuto: il conteggio riprende");
+                    tracker.SetPauseReason(UsageTracker.PauseLocked | UsageTracker.PauseDisconnected, false, now);
+                }
+
                 string fg = (settings.TrackBrowser || settings.TrackSteam) ? Probe.ForegroundProcessName() : "";
                 bool browser = settings.TrackBrowser && browserSet.Contains(fg);
                 bool steam = settings.TrackSteam && Probe.SteamActive(fg);
-                tracker.Tick(DateTime.UtcNow, browser, steam);
+                tracker.Tick(now, browser, steam);
 
-                // Messaggio rimandato (opzione "schermo intero" disattivata): mostralo appena finisce.
-                if (toastPending && !Probe.IsFullscreen(Probe.NotificationState()))
-                {
-                    toastPending = false;
-                    ShowToast(tracker.Session(TimerIds.System), false);
-                }
+                // Messaggio rimandato (schermo bloccato, oppure schermo intero con l'opzione disattivata).
+                if (toastPending) TryShowPendingToast();
             }
             catch (Exception ex)
             {
@@ -125,13 +139,21 @@ namespace WinUsage
 
         private void OnThresholdReached(double seconds)
         {
+            toastPending = true;
+            TryShowPendingToast();
+        }
+
+        /// <summary>
+        /// Mostra il messaggio rimandato appena si può vedere: non sulla schermata di blocco (sparirebbe senza che
+        /// nessuno lo veda) e, se l'opzione è disattivata, non sopra uno schermo intero.
+        /// </summary>
+        private void TryShowPendingToast()
+        {
+            if (tracker.Paused || Probe.UserAway()) return;
             bool fullscreen = Probe.IsFullscreen(Probe.NotificationState());
-            if (fullscreen && !settings.NotifyFullscreen)
-            {
-                toastPending = true;
-                return;
-            }
-            ShowToast(seconds, fullscreen);
+            if (fullscreen && !settings.NotifyFullscreen) return;
+            toastPending = false;
+            ShowToast(tracker.Session(TimerIds.System), fullscreen);
         }
 
         private void ShowToast(double seconds, bool fullscreen)
@@ -146,8 +168,18 @@ namespace WinUsage
             catch (Exception ex)
             {
                 Log.Write(ex);
+            }
+
+            // Notifica di Windows (area notifiche) in aggiunta al messaggio in pixel art. Con un gioco a schermo
+            // intero esclusivo Windows la trattiene e la mostra quando si esce dal gioco.
+            try
+            {
                 notifyIcon.ShowBalloonTip(10000, "WinUsage",
                     "Stai usando il computer da " + Fmt.Long(seconds), ToolTipIcon.Info);
+            }
+            catch (Exception ex)
+            {
+                Log.Write(ex);
             }
         }
 
@@ -178,7 +210,7 @@ namespace WinUsage
             if (popup == null || popup.IsDisposed)
             {
                 popup = new PopupForm(tracker);
-                popup.Deactivate += delegate { popupHiddenAt = DateTime.UtcNow; };
+                popup.VisibleChanged += delegate { if (!popup.Visible) popupHiddenAt = DateTime.UtcNow; };
             }
             popup.ShowNearTray();
         }
@@ -231,13 +263,31 @@ namespace WinUsage
 
         private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
         {
-            // Cambio utente rapido: quando questa sessione viene disconnessa l'utente non sta usando il PC.
+            // Schermo bloccato: l'utente non sta usando il PC, il conteggio si ferma fino allo sblocco.
+            // Cambio utente rapido: quando questa sessione viene disconnessa il PC lo sta usando un altro utente.
             try
             {
-                if (e.Reason == SessionSwitchReason.ConsoleDisconnect || e.Reason == SessionSwitchReason.RemoteDisconnect)
-                    tracker.SetPaused(true, DateTime.UtcNow);
-                else if (e.Reason == SessionSwitchReason.ConsoleConnect || e.Reason == SessionSwitchReason.RemoteConnect)
-                    tracker.SetPaused(false, DateTime.UtcNow);
+                DateTime now = DateTime.UtcNow;
+                switch (e.Reason)
+                {
+                    case SessionSwitchReason.SessionLock:
+                        presentTicks = 0;
+                        tracker.SetPauseReason(UsageTracker.PauseLocked, true, now);
+                        break;
+                    case SessionSwitchReason.SessionUnlock:
+                        tracker.SetPauseReason(UsageTracker.PauseLocked, false, now);
+                        break;
+                    case SessionSwitchReason.ConsoleDisconnect:
+                    case SessionSwitchReason.RemoteDisconnect:
+                        presentTicks = 0;
+                        tracker.SetPauseReason(UsageTracker.PauseDisconnected, true, now);
+                        break;
+                    case SessionSwitchReason.ConsoleConnect:
+                    case SessionSwitchReason.RemoteConnect:
+                        tracker.SetPauseReason(UsageTracker.PauseDisconnected, false, now);
+                        break;
+                }
+                Log.Write("Sessione: " + e.Reason + (tracker.Paused ? " (conteggio in pausa)" : " (conteggio attivo)"));
             }
             catch (Exception ex) { Log.Write(ex); }
         }

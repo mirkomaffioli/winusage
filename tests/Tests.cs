@@ -110,6 +110,38 @@ namespace WinUsage.Tests
             t = Run(tr, t, 5, false, false);
             Eq(before + 5, tr.Session(TimerIds.System), "dopo la riconnessione conta di nuovo");
 
+            Console.WriteLine("[5b] Schermo bloccato");
+            int firedBeforeLock = fired.Count;
+            before = tr.Session(TimerIds.System);
+            tr.SetPauseReason(UsageTracker.PauseLocked, true, t);
+            Eq(true, tr.Paused, "bloccato: in pausa");
+            t = Run(tr, t, 7200, true, true);
+            Eq(before, tr.Session(TimerIds.System), "2 ore con lo schermo bloccato non sono contate");
+            Eq(firedBeforeLock, fired.Count, "nessuna soglia raggiunta mentre è bloccato");
+            tr.SetPauseReason(UsageTracker.PauseLocked, false, t);
+            t = Run(tr, t, 3, false, false);
+            Eq(before + 3, tr.Session(TimerIds.System), "dopo lo sblocco conta di nuovo");
+
+            Console.WriteLine("[5c] Cambio utente: blocco, disconnessione, riconnessione sulla schermata di blocco, sblocco");
+            before = tr.Session(TimerIds.System);
+            tr.SetPauseReason(UsageTracker.PauseLocked, true, t);
+            tr.SetPaused(true, t);
+            t = Run(tr, t, 300, false, false);
+            tr.SetPaused(false, t);   // riconnessa, ma ancora sulla schermata di blocco
+            t = Run(tr, t, 60, false, false);
+            Eq(before, tr.Session(TimerIds.System), "riconnessa ma bloccata: ancora in pausa");
+            tr.SetPauseReason(UsageTracker.PauseLocked, false, t);
+            t = Run(tr, t, 4, false, false);
+            Eq(before + 4, tr.Session(TimerIds.System), "dopo lo sblocco conta di nuovo");
+
+            Console.WriteLine("[5d] Salvaschermo / blocco rilevato dal controllo periodico");
+            before = tr.Session(TimerIds.System);
+            tr.SetPauseReason(UsageTracker.PauseAway, true, t);
+            t = Run(tr, t, 120, false, false);
+            tr.SetPauseReason(UsageTracker.PauseAway, false, t);
+            t = Run(tr, t, 2, false, false);
+            Eq(before + 2, tr.Session(TimerIds.System), "solo i 2 secondi dopo il ritorno");
+
             Console.WriteLine("[6] Soglia disattivata / cambiata");
             AppSettings off = s.Clone(); off.NotifyEnabled = false;
             tr.ApplySettings(off);
