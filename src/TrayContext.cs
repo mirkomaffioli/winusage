@@ -22,6 +22,8 @@ namespace WinUsage
         private PopupForm popup;
         private SettingsForm settingsForm;
         private HistoryForm historyForm;
+        private MaintenanceForm maintenanceForm;
+        private DateTime lastRetentionRun = DateTime.MinValue;
         private DateTime popupHiddenAt = DateTime.MinValue;
         private DateTime lastTooltipUpdate = DateTime.MinValue;
         private bool exiting;
@@ -51,7 +53,11 @@ namespace WinUsage
             icon = LoadIcon();
             ContextMenuStrip menu = new ContextMenuStrip();
             ToolStripMenuItem miHistory = new ToolStripMenuItem("Storico 7 giorni...");
-            miHistory.Click += delegate { ShowHistory(); };
+            miHistory.Click += delegate { ShowHistory(7); };
+            ToolStripMenuItem miHistory30 = new ToolStripMenuItem("Storico 30 giorni...");
+            miHistory30.Click += delegate { ShowHistory(30); };
+            ToolStripMenuItem miMaintenance = new ToolStripMenuItem("Manutenzione database...");
+            miMaintenance.Click += delegate { ShowMaintenance(); };
             ToolStripMenuItem miSettings = new ToolStripMenuItem("Configurazione...");
             miSettings.Click += delegate { ShowSettings(); };
             ToolStripMenuItem miTest = new ToolStripMenuItem("Mostra messaggio di prova");
@@ -59,7 +65,10 @@ namespace WinUsage
             ToolStripMenuItem miExit = new ToolStripMenuItem("Esci");
             miExit.Click += delegate { ExitApp(); };
             menu.Items.Add(miHistory);
+            menu.Items.Add(miHistory30);
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miSettings);
+            menu.Items.Add(miMaintenance);
             menu.Items.Add(miTest);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miExit);
@@ -80,6 +89,8 @@ namespace WinUsage
             timer.Interval = 1000;
             timer.Tick += OnTimerTick;
             timer.Start();
+
+            ApplyRetention();   // conservazione automatica: all'avvio e poi ogni 6 ore
 
             if (!storage.Available)
             {
@@ -128,6 +139,8 @@ namespace WinUsage
 
                 // Messaggio rimandato (schermo bloccato, oppure schermo intero con l'opzione disattivata).
                 if (toastPending) TryShowPendingToast();
+
+                if ((now - lastRetentionRun).TotalHours >= 6) ApplyRetention();
             }
             catch (Exception ex)
             {
@@ -217,15 +230,56 @@ namespace WinUsage
 
         // ---- tasto destro: storico e configurazione ----
 
-        private void ShowHistory()
+        private void ShowHistory(int days)
         {
             if (historyForm != null && !historyForm.IsDisposed)
             {
+                historyForm.SetDays(days);
+                if (historyForm.WindowState == FormWindowState.Minimized) historyForm.WindowState = FormWindowState.Normal;
                 historyForm.Activate();
                 return;
             }
-            historyForm = new HistoryForm(storage, tracker, icon);
+            historyForm = new HistoryForm(storage, tracker, icon, days);
             historyForm.Show();
+        }
+
+        private void ShowMaintenance()
+        {
+            if (maintenanceForm != null && !maintenanceForm.IsDisposed)
+            {
+                maintenanceForm.Activate();
+                return;
+            }
+            maintenanceForm = new MaintenanceForm(storage, tracker, settings.RetentionDays, icon);
+            maintenanceForm.RetentionChanged += OnRetentionChanged;
+            maintenanceForm.DataChanged += delegate
+            {
+                if (historyForm != null && !historyForm.IsDisposed) historyForm.Reload();
+            };
+            maintenanceForm.Show();
+        }
+
+        private void OnRetentionChanged(int days)
+        {
+            settings.RetentionDays = days;
+            settings.Save(storage);
+            ApplyRetention();
+        }
+
+        /// <summary>Conservazione automatica: elimina i giorni più vecchi del limite scelto (se attivo).</summary>
+        private void ApplyRetention()
+        {
+            lastRetentionRun = DateTime.UtcNow;
+            if (settings.RetentionDays <= 0 || !storage.Available) return;
+            try
+            {
+                tracker.FlushNow(DateTime.UtcNow);
+                int deleted = storage.DeleteBefore(Storage.FirstDayToKeep(DateTime.Now, settings.RetentionDays));
+                if (deleted > 0)
+                    Log.Write("Conservazione automatica: eliminati " + deleted + " giorni più vecchi di " +
+                              settings.RetentionDays + " giorni");
+            }
+            catch (Exception ex) { Log.Write(ex); }
         }
 
         private void ShowSettings()
@@ -242,6 +296,7 @@ namespace WinUsage
 
         private void OnSettingsSaved(AppSettings newSettings)
         {
+            newSettings.RetentionDays = settings.RetentionDays;   // si modifica dalla finestra di manutenzione
             settings = newSettings;
             browserSet = settings.BrowserSet();
             settings.Save(storage);
@@ -332,6 +387,7 @@ namespace WinUsage
                 invoker.Dispose();
                 if (settingsForm != null && !settingsForm.IsDisposed) settingsForm.Dispose();
                 if (historyForm != null && !historyForm.IsDisposed) historyForm.Dispose();
+                if (maintenanceForm != null && !maintenanceForm.IsDisposed) maintenanceForm.Dispose();
                 storage.Dispose();
             }
             catch (Exception ex) { Log.Write(ex); }

@@ -62,11 +62,35 @@ namespace WinUsage
             return i == DayKeys.Length - 1 ? s + " (oggi)" : s;
         }
 
+        public int Days { get { return DayKeys.Length; } }
+
+        /// <summary>Etichetta corta per l'asse del grafico quando i giorni sono tanti: "08/11", "oggi".</summary>
+        public string AxisLabel(int i)
+        {
+            if (i == DayKeys.Length - 1) return "oggi";
+            return Dates[i].ToString("dd/MM", CultureInfo.InvariantCulture);
+        }
+
         public double Total(int timer)
         {
             double t = 0;
             for (int i = 0; i < Seconds.Length; i++) t += Seconds[i][timer];
             return t;
+        }
+
+        /// <summary>Giorni del periodo in cui il computer è stato usato (timer Sistema maggiore di zero).</summary>
+        public int DaysWithUsage()
+        {
+            int n = 0;
+            for (int i = 0; i < Seconds.Length; i++) if (Seconds[i][TimerIds.System] > 0) n++;
+            return n;
+        }
+
+        /// <summary>Media sui soli giorni di utilizzo (esclude i giorni a PC spento o prima dell'installazione).</summary>
+        public double AverageOverUsedDays(int timer)
+        {
+            int n = DaysWithUsage();
+            return n == 0 ? 0 : Total(timer) / n;
         }
     }
 
@@ -119,10 +143,30 @@ namespace WinUsage
 
                 int n = data.Seconds.Length;
                 float groupW = (float)plot.Width / n;
-                int barW = (int)Math.Max(4, Math.Min(26, (groupW - 14) / TimerIds.Count));
+                bool dense = n > 14;   // storico a 30 giorni: barre sottili ed etichette diradate
+                float gap = dense ? Math.Max(2f, groupW * 0.2f) : 14f;
+                int barW = (int)Math.Max(dense ? 1 : 4, Math.Min(26, (groupW - gap) / TimerIds.Count));
+
+                // un'etichetta ogni "every" giorni, contando a ritroso da oggi (che ha sempre la sua)
+                int every = 1;
+                if (dense)
+                {
+                    float labelW = g.MeasureString("00/00", font).Width + 10;
+                    every = Math.Max(1, (int)Math.Ceiling(labelW / groupW));
+                }
+
                 for (int i = 0; i < n; i++)
                 {
                     float gx = plot.Left + i * groupW + (groupW - barW * TimerIds.Count) / 2f;
+                    // nei periodi lunghi una riga leggera separa le settimane (prima del lunedì)
+                    if (dense && i > 0 && data.Dates[i].DayOfWeek == DayOfWeek.Monday)
+                    {
+                        using (Pen weekPen = new Pen(Color.FromArgb(35, fore)))
+                        {
+                            int wx = plot.Left + (int)Math.Round(i * groupW);
+                            g.DrawLine(weekPen, wx, plot.Top, wx, plot.Bottom);
+                        }
+                    }
                     for (int t = 0; t < TimerIds.Count; t++)
                     {
                         int hgt = (int)Math.Round(data.Seconds[i][t] / 3600.0 / topH * plot.Height);
@@ -131,8 +175,37 @@ namespace WinUsage
                             g.FillRectangle(b, (int)gx + t * barW, plot.Bottom - hgt, barW - 1, hgt);
                     }
                     bool today = i == n - 1;
-                    g.DrawString(data.ShortLabel(i), today ? bold : font, foreBrush,
-                        new RectangleF(plot.Left + i * groupW, plot.Bottom + 5, groupW, 20), center);
+                    if (!dense)
+                    {
+                        g.DrawString(data.ShortLabel(i), today ? bold : font, foreBrush,
+                            new RectangleF(plot.Left + i * groupW, plot.Bottom + 5, groupW, 20), center);
+                    }
+                    else if ((n - 1 - i) % every == 0)
+                    {
+                        float cx = plot.Left + i * groupW + groupW / 2f;
+                        float w = groupW * every;
+                        g.DrawString(data.AxisLabel(i), today ? bold : font, foreBrush,
+                            new RectangleF(cx - w / 2f, plot.Bottom + 5, w, 20), center);
+                    }
+                }
+
+                // media giornaliera del timer Sistema (sui giorni di utilizzo), linea tratteggiata
+                double avg = data.AverageOverUsedDays(TimerIds.System);
+                if (avg > 0)
+                {
+                    int ay = plot.Bottom - (int)Math.Round(avg / 3600.0 / topH * plot.Height);
+                    using (Pen avgPen = new Pen(Colors[TimerIds.System], 1f))
+                    {
+                        avgPen.DashStyle = DashStyle.Dash;
+                        g.DrawLine(avgPen, plot.Left, ay, plot.Right, ay);
+                    }
+                    string avgText = "media " + Fmt.Compact(avg);
+                    SizeF sz = g.MeasureString(avgText, font);
+                    float ty = Math.Max(plot.Top, ay - sz.Height);
+                    using (Brush backBrush = new SolidBrush(Color.FromArgb(220, back)))
+                        g.FillRectangle(backBrush, plot.Right - sz.Width, ty, sz.Width, sz.Height);
+                    using (Brush avgBrush = new SolidBrush(Colors[TimerIds.System]))
+                        g.DrawString(avgText, font, avgBrush, plot.Right - sz.Width, ty);
                 }
 
                 // legenda

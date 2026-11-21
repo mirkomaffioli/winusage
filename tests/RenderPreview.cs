@@ -64,7 +64,28 @@ namespace WinUsage.Tests
                 HistoryChart.Draw(cg, new Rectangle(0, 0, cb.Width, cb.Height), hd, f, fb, Color.Black, Color.White);
                 cb.Save(System.IO.Path.Combine(outDir, "history.png"), ImageFormat.Png);
             }
-            Console.WriteLine("toast.png e history.png scritti");
+            // storico a 30 giorni: valori di esempio deterministici, con qualche giorno a PC spento
+            int n30 = 30;
+            HistoryData h30 = new HistoryData();
+            h30.DayKeys = new string[n30]; h30.Dates = new DateTime[n30]; h30.Seconds = new double[n30][];
+            for (int i = 0; i < n30; i++)
+            {
+                h30.Dates[i] = new DateTime(2026, 11, 8).AddDays(i - (n30 - 1));
+                h30.DayKeys[i] = h30.Dates[i].ToString("yyyy-MM-dd");
+                double sys = (i % 9 == 4) ? 0 : 2 + ((i * 37) % 70) / 10.0;
+                double br = sys * (0.2 + ((i * 13) % 5) / 10.0);
+                double st = (h30.Dates[i].DayOfWeek == DayOfWeek.Saturday || h30.Dates[i].DayOfWeek == DayOfWeek.Sunday) ? sys * 0.5 : 0;
+                h30.Seconds[i] = new double[] { sys * 3600, br * 3600, st * 3600 };
+            }
+            using (Bitmap cb = new Bitmap(790, 300))
+            using (Graphics cg = Graphics.FromImage(cb))
+            using (Font f = new Font("DejaVu Sans", 9f))
+            using (Font fb = new Font("DejaVu Sans", 9f, FontStyle.Bold))
+            {
+                HistoryChart.Draw(cg, new Rectangle(0, 0, cb.Width, cb.Height), h30, f, fb, Color.Black, Color.White);
+                cb.Save(System.IO.Path.Combine(outDir, "history30.png"), ImageFormat.Png);
+            }
+            Console.WriteLine("toast.png, history.png e history30.png scritti");
             return 0;
         }
     }

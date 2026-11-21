@@ -127,6 +127,24 @@ namespace WinUsage
             Flush(nowUtc);
         }
 
+        /// <summary>Id della riga della sessione in corso nella tabella sessions.</summary>
+        public long SessionId { get { return sessionId; } }
+
+        /// <summary>Scrive subito nel database i secondi accumulati (prima di backup, esportazione, pulizia).</summary>
+        public void FlushNow(DateTime nowUtc)
+        {
+            Flush(nowUtc);
+        }
+
+        /// <summary>
+        /// Dopo che lo storico è stato svuotato: i totali di oggi ripartono da zero. Il tempo "da avvio" resta,
+        /// perché descrive la sessione in corso e non lo storico.
+        /// </summary>
+        public void ResetToday()
+        {
+            for (int i = 0; i < TimerIds.Count; i++) { today[i] = 0; pending[i] = 0; }
+        }
+
         // ---- interni ----
 
         private void Add(int timer, double dt)

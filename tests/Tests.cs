@@ -221,7 +221,83 @@ namespace WinUsage.Tests
             Eq("Domenica 8 novembre (oggi)", hd.LongLabel(6), "etichetta lunga");
             HistoryData empty = HistoryData.Build(sh, today.AddDays(100), null, 7);
             Eq(0.0, empty.Total(TimerIds.System), "nessun dato: totale 0");
+
+            Console.WriteLine("[8b] Storico 30 giorni");
+            HistoryData h30 = HistoryData.Build(sh, today, null, 30);
+            Eq(30, h30.Days, "30 giorni");
+            Eq("2026-10-10", h30.DayKeys[0], "primo giorno (29 giorni prima di oggi)");
+            Eq(10, h30.DaysWithUsage(), "10 giorni con utilizzo");
+            double sum10 = 0; for (int i = 0; i < 10; i++) sum10 += 3600 * (i + 1);
+            Eq(sum10, h30.Total(TimerIds.System), "totale sistema sui 30 giorni");
+            Eq(sum10 / 10, h30.AverageOverUsedDays(TimerIds.System), "media sui giorni di utilizzo");
+            Eq("oggi", h30.AxisLabel(29), "etichetta asse di oggi");
+            Eq("10/10", h30.AxisLabel(0), "etichetta asse compatta");
+            Eq(0.0, empty.AverageOverUsedDays(TimerIds.System), "media senza dati = 0");
             sh.Dispose();
+
+            Console.WriteLine("[10] Manutenzione del database");
+            string dbPath3 = Path.Combine(dir, "maint.db");
+            Storage sm = new Storage(dbPath3);
+            for (int i = 0; i < 400; i++)   // 400 giorni di storico fino a oggi
+            {
+                string day = today.AddDays(-i).ToString("yyyy-MM-dd");
+                sm.AddUsage(day, "system", 1000 + i);
+                sm.AddUsage(day, "browser", 10);
+            }
+            UsageTracker trm = new UsageTracker(sm, s, t0);
+            DbInfo info = sm.GetInfo();
+            Eq(400L, info.Days, "info: giorni registrati");
+            Eq(today.AddDays(-399).ToString("yyyy-MM-dd"), info.FirstDay, "info: primo giorno");
+            Eq(1L, info.Sessions, "info: sessioni");
+            Eq(true, info.FileBytes > 0, "info: dimensione del file");
+            Eq(true, !string.IsNullOrEmpty(info.SqliteVersion), "info: versione SQLite (" + info.SqliteVersion + ")");
+            List<string> ic = sm.IntegrityCheck();
+            Eq("ok", ic.Count == 1 ? ic[0] : string.Join(",", ic.ToArray()), "verifica integrità");
+
+            string keepFrom = Storage.FirstDayToKeep(today, 365);
+            Eq(today.AddDays(-365).ToString("yyyy-MM-dd"), keepFrom, "primo giorno conservato con 365 giorni");
+            Eq(34, sm.CountDaysBefore(keepFrom), "giorni da eliminare (400 - 366)");
+            Eq(34, sm.DeleteBefore(keepFrom), "eliminati 34 giorni");
+            Eq(366L, sm.GetInfo().Days, "restano 366 giorni");
+            Eq(0, sm.DeleteBefore(keepFrom), "seconda pulizia: niente da eliminare");
+            Eq(true, sm.GetDay(today.ToString("yyyy-MM-dd"))[0] > 0, "oggi non viene toccato");
+
+            sm.Compact();
+            Eq("ok", sm.IntegrityCheck()[0], "integro dopo la compattazione");
+            Eq(0L, sm.GetInfo().FreePages, "nessuna pagina libera dopo la compattazione");
+
+            string backup = Path.Combine(dir, "backup.db");
+            sm.Backup(backup);
+            sm.Backup(backup);   // sovrascrittura
+            Storage sb = new Storage(backup);
+            Eq(366L, sb.GetInfo().Days, "il backup contiene lo storico");
+            Eq("60", sb.GetSetting("notify_minutes", null) ?? "60", "il backup si apre");
+            sb.Dispose();
+
+            string csv = Path.Combine(dir, "storico.csv");
+            Eq(366, sm.ExportCsv(csv), "CSV: 366 giorni esportati");
+            string[] lines = File.ReadAllLines(csv);
+            Eq(367, lines.Length, "CSV: intestazione + 366 righe");
+            Eq(true, lines[0].StartsWith("Giorno;Sistema (hh:mm:ss)"), "CSV: intestazione (" + lines[0] + ")");
+            Eq(today.ToString("yyyy-MM-dd") + ";00:16:40;00:00:10;00:00:00;1000;10;0", lines[366], "CSV: riga di oggi");
+            byte[] head = File.ReadAllBytes(csv);
+            Eq(true, head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF, "CSV: UTF-8 con BOM per Excel");
+
+            trm.Tick(t0.AddSeconds(1), false, false);
+            sm.DeleteAllUsage(trm.SessionId);
+            trm.ResetToday();
+            Eq(0L, sm.GetInfo().Days, "azzerato: nessun giorno");
+            Eq(1L, sm.GetInfo().Sessions, "azzerato: resta solo la sessione in corso");
+            Eq(0.0, trm.Today(TimerIds.System), "azzerato: oggi riparte da zero");
+            Eq(1.0, trm.Session(TimerIds.System), "azzerato: il tempo da avvio resta");
+
+            AppSettings rs = AppSettings.Load(sm);
+            Eq(0, rs.RetentionDays, "conservazione automatica disattivata di default");
+            rs.RetentionDays = 10; rs.Save(sm);
+            Eq(AppSettings.MinRetentionDays, AppSettings.Load(sm).RetentionDays, "conservazione: minimo " + AppSettings.MinRetentionDays + " giorni");
+            rs.RetentionDays = 180; rs.Save(sm);
+            Eq(180, AppSettings.Load(sm).RetentionDays, "conservazione: 180 giorni salvati");
+            sm.Dispose();
 
             try { Directory.Delete(dir, true); } catch { }
             Console.WriteLine();
