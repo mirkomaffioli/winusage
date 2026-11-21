@@ -30,7 +30,14 @@ namespace WinUsage
         private string dayKey;
         private double sinceFlush;
         private double nextThreshold;
-        private bool paused;
+        private int pauseReasons;   // combinazione di Pause*: se diverso da zero non si conta
+
+        /// <summary>Sessione disconnessa (cambio utente rapido, desktop remoto chiuso).</summary>
+        public const int PauseDisconnected = 1;
+        /// <summary>Schermo bloccato (Win+L, blocco automatico).</summary>
+        public const int PauseLocked = 2;
+        /// <summary>Windows segnala che l'utente non c'è (blocco o salvaschermo), controllato a ogni tick.</summary>
+        public const int PauseAway = 4;
 
         /// <summary>Sollevato quando il tempo di utilizzo supera la soglia; argomento = secondi di utilizzo.</summary>
         public event Action<double> ThresholdReached;
@@ -64,7 +71,7 @@ namespace WinUsage
             double dt = (nowUtc - lastTickUtc).TotalSeconds;
             lastTickUtc = nowUtc;
 
-            if (paused) return;
+            if (pauseReasons != 0) return;
             // Intervallo anomalo: standby, ibernazione o cambio dell'orologio -> non si conta.
             if (dt <= 0 || dt > MaxGapSeconds) return;
 
@@ -93,18 +100,49 @@ namespace WinUsage
             lastTickUtc = nowUtc;
         }
 
+        public bool Paused { get { return pauseReasons != 0; } }
+
         /// <summary>Sessione utente disconnessa (cambio utente rapido) o riconnessa.</summary>
         public void SetPaused(bool value, DateTime nowUtc)
         {
-            if (value == paused) return;
-            if (value) Flush(nowUtc);
-            paused = value;
+            SetPauseReason(PauseDisconnected, value, nowUtc);
+        }
+
+        /// <summary>
+        /// Attiva o disattiva un motivo di pausa (<see cref="PauseLocked"/>, ...). Il conteggio riprende solo quando
+        /// non resta nessun motivo: ad esempio con il cambio utente Windows blocca e poi disconnette la sessione, e al
+        /// ritorno la riconnette quando è ancora sulla schermata di blocco.
+        /// </summary>
+        public void SetPauseReason(int reason, bool on, DateTime nowUtc)
+        {
+            int next = on ? (pauseReasons | reason) : (pauseReasons & ~reason);
+            if (next == pauseReasons) return;
+            if (pauseReasons == 0) Flush(nowUtc);   // sta entrando in pausa: salva
+            pauseReasons = next;
             lastTickUtc = nowUtc;
         }
 
         public void Shutdown(DateTime nowUtc)
         {
             Flush(nowUtc);
+        }
+
+        /// <summary>Id della riga della sessione in corso nella tabella sessions.</summary>
+        public long SessionId { get { return sessionId; } }
+
+        /// <summary>Scrive subito nel database i secondi accumulati (prima di backup, esportazione, pulizia).</summary>
+        public void FlushNow(DateTime nowUtc)
+        {
+            Flush(nowUtc);
+        }
+
+        /// <summary>
+        /// Dopo che lo storico è stato svuotato: i totali di oggi ripartono da zero. Il tempo "da avvio" resta,
+        /// perché descrive la sessione in corso e non lo storico.
+        /// </summary>
+        public void ResetToday()
+        {
+            for (int i = 0; i < TimerIds.Count; i++) { today[i] = 0; pending[i] = 0; }
         }
 
         // ---- interni ----

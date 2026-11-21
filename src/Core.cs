@@ -100,6 +100,10 @@ namespace WinUsage
         public bool TrackBrowser = true;
         public bool TrackSteam = true;
         public string BrowserProcesses = DefaultBrowsers;
+        public int RetentionDays = 0;          // pulizia automatica: elimina i giorni più vecchi di N (0 = conserva tutto)
+
+        public const int MinRetentionDays = 31;   // così lo storico a 30 giorni resta sempre completo
+        public const int MaxRetentionDays = 3650;
 
         public AppSettings Clone()
         {
@@ -129,6 +133,9 @@ namespace WinUsage
             int minutes;
             if (int.TryParse(st.GetSetting("notify_minutes", null), NumberStyles.Integer, CultureInfo.InvariantCulture, out minutes))
                 s.NotifyMinutes = Math.Max(1, Math.Min(1440, minutes));
+            int keep;
+            if (int.TryParse(st.GetSetting("retention_days", null), NumberStyles.Integer, CultureInfo.InvariantCulture, out keep))
+                s.RetentionDays = keep <= 0 ? 0 : Math.Max(MinRetentionDays, Math.Min(MaxRetentionDays, keep));
             string br = st.GetSetting("browser_processes", null);
             if (!string.IsNullOrEmpty(br)) s.BrowserProcesses = br;
             return s;
@@ -143,6 +150,7 @@ namespace WinUsage
             st.SetSetting("track_browser", TrackBrowser ? "1" : "0");
             st.SetSetting("track_steam", TrackSteam ? "1" : "0");
             st.SetSetting("browser_processes", BrowserProcesses ?? DefaultBrowsers);
+            st.SetSetting("retention_days", RetentionDays.ToString(CultureInfo.InvariantCulture));
         }
 
         private static bool GetBool(Storage st, string key, bool def)
@@ -150,6 +158,30 @@ namespace WinUsage
             string v = st.GetSetting(key, null);
             if (v == null) return def;
             return v == "1";
+        }
+    }
+
+    /// <summary>Informazioni sul database mostrate nella finestra di manutenzione.</summary>
+    internal sealed class DbInfo
+    {
+        public string Path;
+        public long FileBytes, WalBytes, PageSize, PageCount, FreePages, Days, Sessions;
+        public string FirstDay, LastDay, SqliteVersion;
+
+        public long FreeBytes { get { return FreePages * PageSize; } }
+
+        public static string Size(long bytes)
+        {
+            if (bytes < 1024) return bytes + " byte";
+            if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString("0.#", Italian) + " KB";
+            return (bytes / (1024.0 * 1024.0)).ToString("0.##", Italian) + " MB";
+        }
+
+        private static readonly CultureInfo Italian = MakeItalian();
+
+        private static CultureInfo MakeItalian()
+        {
+            try { return new CultureInfo("it-IT"); } catch (Exception) { return CultureInfo.InvariantCulture; }
         }
     }
 
@@ -288,6 +320,173 @@ namespace WinUsage
         public List<object[]> Query(string sql, params object[] args)
         {
             return db == null ? new List<object[]>() : db.Query(sql, args);
+        }
+
+        // ---- manutenzione (questi metodi segnalano gli errori con un'eccezione: li mostra la finestra) ----
+
+        private Db Open()
+        {
+            if (db == null) throw new InvalidOperationException("Database non disponibile.");
+            return db;
+        }
+
+        /// <summary>Dimensioni e contenuto del database, per la finestra di manutenzione.</summary>
+        public DbInfo GetInfo()
+        {
+            Db d = Open();
+            DbInfo i = new DbInfo();
+            i.Path = DbPath;
+            i.FileBytes = FileSize(DbPath);
+            i.WalBytes = FileSize(DbPath + "-wal");
+            i.PageSize = ScalarLong(d, "PRAGMA page_size");
+            i.PageCount = ScalarLong(d, "PRAGMA page_count");
+            i.FreePages = ScalarLong(d, "PRAGMA freelist_count");
+            List<object[]> r = d.Query("SELECT COUNT(DISTINCT day), MIN(day), MAX(day) FROM usage_daily");
+            i.Days = (long)r[0][0];
+            i.FirstDay = r[0][1] as string;
+            i.LastDay = r[0][2] as string;
+            i.Sessions = ScalarLong(d, "SELECT COUNT(*) FROM sessions");
+            i.SqliteVersion = d.Query("SELECT sqlite_version()")[0][0] as string;
+            return i;
+        }
+
+        /// <summary>PRAGMA integrity_check: una sola riga "ok" se il database è sano.</summary>
+        public List<string> IntegrityCheck()
+        {
+            List<string> result = new List<string>();
+            foreach (object[] row in Open().Query("PRAGMA integrity_check")) result.Add(Convert.ToString(row[0]));
+            return result;
+        }
+
+        /// <summary>Riscrive il database eliminando lo spazio inutilizzato. Restituisce i byte recuperati.</summary>
+        public long Compact()
+        {
+            Db d = Open();
+            long before = FileSize(DbPath) + FileSize(DbPath + "-wal");
+            Checkpoint();
+            d.Execute("VACUUM");
+            Checkpoint();
+            long after = FileSize(DbPath) + FileSize(DbPath + "-wal");
+            return Math.Max(0, before - after);
+        }
+
+        /// <summary>Copia completa e coerente del database in <paramref name="target"/> (sovrascrive).</summary>
+        public void Backup(string target)
+        {
+            Db d = Open();
+            if (File.Exists(target)) File.Delete(target);
+            try
+            {
+                d.Execute("VACUUM INTO ?", target);   // SQLite 3.27 o successivo (Windows 11 lo è)
+            }
+            catch (Exception ex)
+            {
+                // SQLite più vecchio: tutto il contenuto del WAL nel file principale, poi una copia del file.
+                Log.Write("VACUUM INTO non disponibile, copia del file: " + ex.Message);
+                if (File.Exists(target)) File.Delete(target);
+                Checkpoint();
+                File.Copy(DbPath, target, true);
+            }
+        }
+
+        /// <summary>Elimina i totali giornalieri e le sessioni precedenti a <paramref name="firstDayToKeep"/> (yyyy-MM-dd).</summary>
+        /// <returns>Numero di giorni eliminati.</returns>
+        public int DeleteBefore(string firstDayToKeep)
+        {
+            Db d = Open();
+            int days = CountDaysBefore(firstDayToKeep);
+            d.Execute("BEGIN");
+            try
+            {
+                d.Execute("DELETE FROM usage_daily WHERE day < ?", firstDayToKeep);
+                d.Execute("DELETE FROM sessions WHERE started_utc < ?", firstDayToKeep);
+                d.Execute("COMMIT");
+            }
+            catch
+            {
+                try { d.Execute("ROLLBACK"); } catch { }
+                throw;
+            }
+            return days;
+        }
+
+        /// <summary>Quanti giorni dello storico sono precedenti a <paramref name="dayKey"/>.</summary>
+        public int CountDaysBefore(string dayKey)
+        {
+            return (int)(long)Open().Query("SELECT COUNT(DISTINCT day) FROM usage_daily WHERE day < ?", dayKey)[0][0];
+        }
+
+        /// <summary>Primo giorno conservato quando si eliminano i dati più vecchi di <paramref name="days"/> giorni.</summary>
+        public static string FirstDayToKeep(DateTime todayLocal, int days)
+        {
+            return todayLocal.Date.AddDays(-days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>Svuota lo storico (totali e sessioni), tranne la sessione in corso. La configurazione resta.</summary>
+        public void DeleteAllUsage(long keepSessionId)
+        {
+            Db d = Open();
+            d.Execute("BEGIN");
+            try
+            {
+                d.Execute("DELETE FROM usage_daily");
+                d.Execute("DELETE FROM sessions WHERE id <> ?", keepSessionId);
+                d.Execute("COMMIT");
+            }
+            catch
+            {
+                try { d.Execute("ROLLBACK"); } catch { }
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Esporta i totali giornalieri in CSV (separatore ";" e UTF-8 con BOM, come si aspetta Excel in italiano).
+        /// </summary>
+        /// <returns>Numero di giorni esportati.</returns>
+        public int ExportCsv(string target)
+        {
+            SortedDictionary<string, long[]> days = new SortedDictionary<string, long[]>(StringComparer.Ordinal);
+            foreach (object[] row in Open().Query("SELECT day, timer, seconds FROM usage_daily"))
+            {
+                int i = Array.IndexOf(TimerIds.Names, (string)row[1]);
+                if (i < 0) continue;
+                long[] arr;
+                if (!days.TryGetValue((string)row[0], out arr)) { arr = new long[TimerIds.Count]; days[(string)row[0]] = arr; }
+                arr[i] = (long)row[2];
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.Append("Giorno");
+            for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(TimerIds.Labels[t]).Append(" (hh:mm:ss)");
+            for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(TimerIds.Labels[t]).Append(" (secondi)");
+            sb.Append("\r\n");
+            foreach (KeyValuePair<string, long[]> kv in days)
+            {
+                sb.Append(kv.Key);
+                for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(Fmt.Clock(kv.Value[t]));
+                for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(kv.Value[t].ToString(CultureInfo.InvariantCulture));
+                sb.Append("\r\n");
+            }
+            File.WriteAllText(target, sb.ToString(), new UTF8Encoding(true));
+            return days.Count;
+        }
+
+        private void Checkpoint()
+        {
+            Open().Execute("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+
+        private static long ScalarLong(Db d, string sql)
+        {
+            List<object[]> r = d.Query(sql);
+            return r.Count > 0 && r[0][0] is long ? (long)r[0][0] : 0;
+        }
+
+        private static long FileSize(string path)
+        {
+            try { FileInfo fi = new FileInfo(path); return fi.Exists ? fi.Length : 0; }
+            catch { return 0; }
         }
 
         private static string Iso(DateTime utc)

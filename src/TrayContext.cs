@@ -22,10 +22,13 @@ namespace WinUsage
         private PopupForm popup;
         private SettingsForm settingsForm;
         private HistoryForm historyForm;
+        private MaintenanceForm maintenanceForm;
+        private DateTime lastRetentionRun = DateTime.MinValue;
         private DateTime popupHiddenAt = DateTime.MinValue;
         private DateTime lastTooltipUpdate = DateTime.MinValue;
         private bool exiting;
-        private bool toastPending;   // soglia raggiunta durante lo schermo intero, messaggio rimandato
+        private bool toastPending;   // soglia raggiunta mentre il messaggio non si poteva vedere: rimandato
+        private int presentTicks;    // secondi consecutivi in cui le sonde dicono che lo schermo è sbloccato
         private readonly Control invoker = new Control();   // per rientrare nel thread dell'interfaccia
 
         public TrayContext(string dbPath)
@@ -50,13 +53,23 @@ namespace WinUsage
             icon = LoadIcon();
             ContextMenuStrip menu = new ContextMenuStrip();
             ToolStripMenuItem miHistory = new ToolStripMenuItem("Storico 7 giorni...");
-            miHistory.Click += delegate { ShowHistory(); };
+            miHistory.Click += delegate { ShowHistory(7); };
+            ToolStripMenuItem miHistory30 = new ToolStripMenuItem("Storico 30 giorni...");
+            miHistory30.Click += delegate { ShowHistory(30); };
+            ToolStripMenuItem miMaintenance = new ToolStripMenuItem("Manutenzione database...");
+            miMaintenance.Click += delegate { ShowMaintenance(); };
             ToolStripMenuItem miSettings = new ToolStripMenuItem("Configurazione...");
             miSettings.Click += delegate { ShowSettings(); };
+            ToolStripMenuItem miTest = new ToolStripMenuItem("Mostra messaggio di prova");
+            miTest.Click += delegate { ShowToast(tracker.Session(TimerIds.System), false); };
             ToolStripMenuItem miExit = new ToolStripMenuItem("Esci");
             miExit.Click += delegate { ExitApp(); };
             menu.Items.Add(miHistory);
+            menu.Items.Add(miHistory30);
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miSettings);
+            menu.Items.Add(miMaintenance);
+            menu.Items.Add(miTest);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(miExit);
 
@@ -76,6 +89,8 @@ namespace WinUsage
             timer.Interval = 1000;
             timer.Tick += OnTimerTick;
             timer.Start();
+
+            ApplyRetention();   // conservazione automatica: all'avvio e poi ogni 6 ore
 
             if (!storage.Available)
             {
@@ -103,17 +118,29 @@ namespace WinUsage
         {
             try
             {
+                DateTime now = DateTime.UtcNow;
+
+                // Schermo bloccato o salvaschermo: controllo a ogni secondo, in aggiunta agli eventi di sessione
+                // (che arrivano subito ma che, se persi, lascerebbero il conteggio acceso o spento per sempre).
+                bool away = Probe.UserAway();
+                tracker.SetPauseReason(UsageTracker.PauseAway, away, now);
+                presentTicks = away ? 0 : presentTicks + 1;
+                if (presentTicks == 5 && tracker.Paused && !away)
+                {
+                    // Lo schermo risulta sbloccato da 5 secondi ma non è arrivato l'evento di sblocco/riconnessione.
+                    Log.Write("Evento di sblocco non ricevuto: il conteggio riprende");
+                    tracker.SetPauseReason(UsageTracker.PauseLocked | UsageTracker.PauseDisconnected, false, now);
+                }
+
                 string fg = (settings.TrackBrowser || settings.TrackSteam) ? Probe.ForegroundProcessName() : "";
                 bool browser = settings.TrackBrowser && browserSet.Contains(fg);
                 bool steam = settings.TrackSteam && Probe.SteamActive(fg);
-                tracker.Tick(DateTime.UtcNow, browser, steam);
+                tracker.Tick(now, browser, steam);
 
-                // Messaggio rimandato (opzione "schermo intero" disattivata): mostralo appena finisce.
-                if (toastPending && !Probe.IsFullscreen(Probe.NotificationState()))
-                {
-                    toastPending = false;
-                    ShowToast(tracker.Session(TimerIds.System), false);
-                }
+                // Messaggio rimandato (schermo bloccato, oppure schermo intero con l'opzione disattivata).
+                if (toastPending) TryShowPendingToast();
+
+                if ((now - lastRetentionRun).TotalHours >= 6) ApplyRetention();
             }
             catch (Exception ex)
             {
@@ -125,13 +152,21 @@ namespace WinUsage
 
         private void OnThresholdReached(double seconds)
         {
+            toastPending = true;
+            TryShowPendingToast();
+        }
+
+        /// <summary>
+        /// Mostra il messaggio rimandato appena si può vedere: non sulla schermata di blocco (sparirebbe senza che
+        /// nessuno lo veda) e, se l'opzione è disattivata, non sopra uno schermo intero.
+        /// </summary>
+        private void TryShowPendingToast()
+        {
+            if (tracker.Paused || Probe.UserAway()) return;
             bool fullscreen = Probe.IsFullscreen(Probe.NotificationState());
-            if (fullscreen && !settings.NotifyFullscreen)
-            {
-                toastPending = true;
-                return;
-            }
-            ShowToast(seconds, fullscreen);
+            if (fullscreen && !settings.NotifyFullscreen) return;
+            toastPending = false;
+            ShowToast(tracker.Session(TimerIds.System), fullscreen);
         }
 
         private void ShowToast(double seconds, bool fullscreen)
@@ -146,8 +181,18 @@ namespace WinUsage
             catch (Exception ex)
             {
                 Log.Write(ex);
+            }
+
+            // Notifica di Windows (area notifiche) in aggiunta al messaggio in pixel art. Con un gioco a schermo
+            // intero esclusivo Windows la trattiene e la mostra quando si esce dal gioco.
+            try
+            {
                 notifyIcon.ShowBalloonTip(10000, "WinUsage",
                     "Stai usando il computer da " + Fmt.Long(seconds), ToolTipIcon.Info);
+            }
+            catch (Exception ex)
+            {
+                Log.Write(ex);
             }
         }
 
@@ -178,22 +223,63 @@ namespace WinUsage
             if (popup == null || popup.IsDisposed)
             {
                 popup = new PopupForm(tracker);
-                popup.Deactivate += delegate { popupHiddenAt = DateTime.UtcNow; };
+                popup.VisibleChanged += delegate { if (!popup.Visible) popupHiddenAt = DateTime.UtcNow; };
             }
             popup.ShowNearTray();
         }
 
         // ---- tasto destro: storico e configurazione ----
 
-        private void ShowHistory()
+        private void ShowHistory(int days)
         {
             if (historyForm != null && !historyForm.IsDisposed)
             {
+                historyForm.SetDays(days);
+                if (historyForm.WindowState == FormWindowState.Minimized) historyForm.WindowState = FormWindowState.Normal;
                 historyForm.Activate();
                 return;
             }
-            historyForm = new HistoryForm(storage, tracker, icon);
+            historyForm = new HistoryForm(storage, tracker, icon, days);
             historyForm.Show();
+        }
+
+        private void ShowMaintenance()
+        {
+            if (maintenanceForm != null && !maintenanceForm.IsDisposed)
+            {
+                maintenanceForm.Activate();
+                return;
+            }
+            maintenanceForm = new MaintenanceForm(storage, tracker, settings.RetentionDays, icon);
+            maintenanceForm.RetentionChanged += OnRetentionChanged;
+            maintenanceForm.DataChanged += delegate
+            {
+                if (historyForm != null && !historyForm.IsDisposed) historyForm.Reload();
+            };
+            maintenanceForm.Show();
+        }
+
+        private void OnRetentionChanged(int days)
+        {
+            settings.RetentionDays = days;
+            settings.Save(storage);
+            ApplyRetention();
+        }
+
+        /// <summary>Conservazione automatica: elimina i giorni più vecchi del limite scelto (se attivo).</summary>
+        private void ApplyRetention()
+        {
+            lastRetentionRun = DateTime.UtcNow;
+            if (settings.RetentionDays <= 0 || !storage.Available) return;
+            try
+            {
+                tracker.FlushNow(DateTime.UtcNow);
+                int deleted = storage.DeleteBefore(Storage.FirstDayToKeep(DateTime.Now, settings.RetentionDays));
+                if (deleted > 0)
+                    Log.Write("Conservazione automatica: eliminati " + deleted + " giorni più vecchi di " +
+                              settings.RetentionDays + " giorni");
+            }
+            catch (Exception ex) { Log.Write(ex); }
         }
 
         private void ShowSettings()
@@ -210,6 +296,7 @@ namespace WinUsage
 
         private void OnSettingsSaved(AppSettings newSettings)
         {
+            newSettings.RetentionDays = settings.RetentionDays;   // si modifica dalla finestra di manutenzione
             settings = newSettings;
             browserSet = settings.BrowserSet();
             settings.Save(storage);
@@ -231,13 +318,31 @@ namespace WinUsage
 
         private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
         {
-            // Cambio utente rapido: quando questa sessione viene disconnessa l'utente non sta usando il PC.
+            // Schermo bloccato: l'utente non sta usando il PC, il conteggio si ferma fino allo sblocco.
+            // Cambio utente rapido: quando questa sessione viene disconnessa il PC lo sta usando un altro utente.
             try
             {
-                if (e.Reason == SessionSwitchReason.ConsoleDisconnect || e.Reason == SessionSwitchReason.RemoteDisconnect)
-                    tracker.SetPaused(true, DateTime.UtcNow);
-                else if (e.Reason == SessionSwitchReason.ConsoleConnect || e.Reason == SessionSwitchReason.RemoteConnect)
-                    tracker.SetPaused(false, DateTime.UtcNow);
+                DateTime now = DateTime.UtcNow;
+                switch (e.Reason)
+                {
+                    case SessionSwitchReason.SessionLock:
+                        presentTicks = 0;
+                        tracker.SetPauseReason(UsageTracker.PauseLocked, true, now);
+                        break;
+                    case SessionSwitchReason.SessionUnlock:
+                        tracker.SetPauseReason(UsageTracker.PauseLocked, false, now);
+                        break;
+                    case SessionSwitchReason.ConsoleDisconnect:
+                    case SessionSwitchReason.RemoteDisconnect:
+                        presentTicks = 0;
+                        tracker.SetPauseReason(UsageTracker.PauseDisconnected, true, now);
+                        break;
+                    case SessionSwitchReason.ConsoleConnect:
+                    case SessionSwitchReason.RemoteConnect:
+                        tracker.SetPauseReason(UsageTracker.PauseDisconnected, false, now);
+                        break;
+                }
+                Log.Write("Sessione: " + e.Reason + (tracker.Paused ? " (conteggio in pausa)" : " (conteggio attivo)"));
             }
             catch (Exception ex) { Log.Write(ex); }
         }
@@ -282,6 +387,7 @@ namespace WinUsage
                 invoker.Dispose();
                 if (settingsForm != null && !settingsForm.IsDisposed) settingsForm.Dispose();
                 if (historyForm != null && !historyForm.IsDisposed) historyForm.Dispose();
+                if (maintenanceForm != null && !maintenanceForm.IsDisposed) maintenanceForm.Dispose();
                 storage.Dispose();
             }
             catch (Exception ex) { Log.Write(ex); }

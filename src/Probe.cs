@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -17,6 +18,18 @@ namespace WinUsage
 
         [DllImport("shell32.dll")]
         private static extern int SHQueryUserNotificationState(out int state);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
+
+        [DllImport("user32.dll")]
+        private static extern bool CloseDesktop(IntPtr hDesktop);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool GetUserObjectInformation(IntPtr hObj, int index, StringBuilder info, int length, out int needed);
+
+        private const uint DESKTOP_READOBJECTS = 0x0001;
+        private const int UOI_NAME = 2;
 
         private static uint cachedPid;
         private static string cachedName = "";
@@ -69,6 +82,32 @@ namespace WinUsage
             }
             catch (Exception) { }
             return 5;
+        }
+
+        /// <summary>
+        /// Vero se l'utente non sta usando la sessione: schermo bloccato, salvaschermo o sessione non attiva
+        /// (cambio utente rapido). Due controlli indipendenti: lo stato delle notifiche di Windows e il desktop che
+        /// riceve l'input, che con lo schermo bloccato è quello protetto di Winlogon e non è accessibile.
+        /// </summary>
+        public static bool UserAway()
+        {
+            if (NotificationState() == 1) return true;
+            try
+            {
+                IntPtr desk = OpenInputDesktop(0, false, DESKTOP_READOBJECTS);
+                // Accesso negato: l'input va al desktop protetto (schermata di blocco). Altri errori non dicono nulla.
+                if (desk == IntPtr.Zero) return Marshal.GetLastWin32Error() == 5;
+                try
+                {
+                    StringBuilder name = new StringBuilder(256);
+                    int needed;
+                    if (GetUserObjectInformation(desk, UOI_NAME, name, name.Capacity * 2, out needed))
+                        return !string.Equals(name.ToString(), "Default", StringComparison.OrdinalIgnoreCase);
+                }
+                finally { CloseDesktop(desk); }
+            }
+            catch (Exception) { }
+            return false;
         }
 
         public static bool IsFullscreen(int notificationState)
