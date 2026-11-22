@@ -137,7 +137,7 @@ passaggi). Se perdi il telefono: @BotFather → `/revoke`. Se il PC lo usano alt
 
 ## Installare
 
-`dist\WinUsage-Setup-1.3.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.3.1.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -155,7 +155,10 @@ Per rigenerare l'installer: `build-installer.bat` (Windows, richiede NSIS) oppur
 
     build.bat
 
-**Su Linux/macOS** con Mono (`mono-mcs`, `libmono-system-windows-forms4.0-cil`):
+**Su Linux/macOS** con Mono (`mono-mcs`, `mono-devel`, `libmono-system-windows-forms4.0-cil`). Lo script compila
+contro gli assembly di riferimento di .NET Framework 4.8 inclusi in `mono-devel` (`/usr/lib/mono/4.8-api`), non contro
+le librerie di Mono: alcune classi stanno in DLL diverse e l'exe si chiuderebbe all'avvio su Windows
+(è successo con la 1.3.0, sistemato nella 1.3.1):
 
     bash build-mono.sh
 
@@ -213,6 +216,9 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 - Messaggio di soglia, notifiche del controllo remoto e grafico dello storico disegnati su PNG con Mono e controllati
   a occhio (`docs/`).
 - L'installer si compila senza avvisi con NSIS 3.09.
+- La 1.3.0 su Windows si chiudeva all'avvio (`TypeLoadException` su `Queue<T>`, compilata contro le librerie di Mono):
+  dalla 1.3.1 si compila contro gli assembly di riferimento di .NET 4.8 e i riferimenti dell'exe sono stati confrontati
+  con quelli della build sbagliata (era l'unica differenza).
 - **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
   notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
   Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio) e,
