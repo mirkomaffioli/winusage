@@ -185,7 +185,8 @@ namespace WinUsage
                 string user = null, error = null;
                 try { user = new TelegramApi(token).GetMeUsername(); }
                 catch (TelegramException ex) { error = ex.Unauthorized ? "Token non valido." : ex.Message; }
-                catch (Exception ex) { error = ex.Message; }
+                catch (Exception ex) { error = TelegramApi.Redact(ex.Message, token); }
+                if (error != null) Log.Write("Verifica del token non riuscita: " + error);
                 Post(delegate { done(user, error); });
             });
         }

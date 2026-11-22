@@ -137,7 +137,7 @@ passaggi). Se perdi il telefono: @BotFather → `/revoke`. Se il PC lo usano alt
 
 ## Installare
 
-`dist\WinUsage-Setup-1.3.1.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.3.2.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -219,6 +219,8 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 - La 1.3.0 su Windows si chiudeva all'avvio (`TypeLoadException` su `Queue<T>`, compilata contro le librerie di Mono):
   dalla 1.3.1 si compila contro gli assembly di riferimento di .NET 4.8 e i riferimenti dell'exe sono stati confrontati
   con quelli della build sbagliata (era l'unica differenza).
+- La 1.3.1 su Windows 11 non riusciva a collegarsi a Telegram ("Rete: ReceiveFailure"): dalla 1.3.2 la connessione
+  usa TLS 1.2 esplicito invece della scelta di sistema, e gli errori di rete riportano la causa completa (anche nel log).
 - **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
   notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
   Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio) e,

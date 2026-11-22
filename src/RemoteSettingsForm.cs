@@ -220,6 +220,7 @@ namespace WinUsage
             };
             p.Controls.Add(Row(txtToken, show, verify));
             lblToken.AutoSize = true;
+            lblToken.MaximumSize = new Size(w, 0);
             lblToken.Margin = new Padding(3, 2, 3, 6);
             p.Controls.Add(lblToken);
 

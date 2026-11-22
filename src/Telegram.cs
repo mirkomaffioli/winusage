@@ -51,14 +51,12 @@ namespace WinUsage
 
         static TelegramApi()
         {
-            // Un exe compilato senza indicare la versione del framework partirebbe con i protocolli "storici": si lascia
-            // scegliere a Windows (TLS 1.2/1.3 su Windows 11). La verifica dei certificati resta quella di sistema.
-            try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)0; }   // SystemDefault (.NET 4.7+)
-            catch (Exception)
-            {
-                try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; }   // Tls12
-                catch (Exception) { }
-            }
+            // TLS 1.2 esplicito. L'exe è compilato senza l'attributo della versione del framework, quindi .NET 4.8 lo tratta
+            // come un'app vecchia; lasciando scegliere a Windows (SystemDefault) su Windows 11 si negozia TLS 1.3, che in
+            // .NET Framework può chiudere la connessione durante l'handshake ("ReceiveFailure", visto nella 1.3.1).
+            // Telegram accetta TLS 1.2. La verifica dei certificati resta quella di sistema.
+            try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; }   // Tls12
+            catch (Exception) { }
             // Il limite predefinito è 2 connessioni per server: lettura (long polling) e invio le occuperebbero entrambe e
             // il messaggio di spegnimento, che ha solo 3 secondi, resterebbe in attesa.
             if (ServicePointManager.DefaultConnectionLimit < 8) ServicePointManager.DefaultConnectionLimit = 8;
@@ -246,7 +244,7 @@ namespace WinUsage
             catch (WebException ex)
             {
                 HttpWebResponse resp = ex.Response as HttpWebResponse;
-                if (resp == null) throw new TelegramException(0, "Rete: " + Redact(ex.Status.ToString(), token));
+                if (resp == null) throw new TelegramException(0, "Rete: " + Redact(Describe(ex), token));
                 using (resp)
                 {
                     status = (int)resp.StatusCode;
@@ -278,6 +276,15 @@ namespace WinUsage
             int code = (int)Long(json, "error_code");
             if (code == 0) code = status;
             throw new TelegramException(code, Redact(Str(json, "description"), token));
+        }
+
+        /// <summary>Stato e causa più interna di un errore di rete (es. "SecureChannelFailure: ... handshake ..."), per capire cosa non va.</summary>
+        private static string Describe(WebException ex)
+        {
+            Exception inner = ex;
+            while (inner.InnerException != null) inner = inner.InnerException;
+            string detail = inner != ex ? inner.Message : "";
+            return ex.Status + (detail.Length > 0 ? " (" + detail.Trim() + ")" : "");
         }
 
         private void NoteDate(HttpWebResponse resp)
