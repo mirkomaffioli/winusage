@@ -11,12 +11,40 @@ namespace WinUsage
     internal static class ChipTune
     {
         private const int SampleRate = 22050;
-        private static SoundPlayer player;
+
+        /// <summary>Jingle per tipo di notifica: 0 soglia, 1 notifica breve, 2 messaggio, 3 allarme, 4 tic, 5 annullato.</summary>
+        private static readonly double[][] TuneFreqs =
+        {
+            new double[] { 523.25, 659.25, 783.99, 1046.50 },   // Do - Mi - Sol - Do
+            new double[] { 880.00, 1318.51 },                   // La - Mi: "clic"
+            new double[] { 659.25, 783.99, 659.25, 987.77 },    // Mi - Sol - Mi - Si
+            new double[] { 987.77, 698.46, 987.77, 698.46 },    // Si - Fa ripetuti: allarme
+            new double[] { 1567.98 },                           // tic del conto alla rovescia
+            new double[] { 1046.50, 783.99, 523.25 },           // Do - Sol - Do discendente
+        };
+
+        private static readonly int[][] TuneMs =
+        {
+            new int[] { 90, 90, 90, 220 },
+            new int[] { 50, 90 },
+            new int[] { 80, 80, 80, 180 },
+            new int[] { 120, 120, 120, 200 },
+            new int[] { 35 },
+            new int[] { 90, 90, 200 },
+        };
+
+        private static readonly SoundPlayer[] players = new SoundPlayer[TuneFreqs.Length];
 
         public static byte[] BuildWav()
         {
-            double[] freqs = { 523.25, 659.25, 783.99, 1046.50 };   // Do - Mi - Sol - Do
-            int[] ms = { 90, 90, 90, 220 };
+            return BuildWav(0);
+        }
+
+        public static byte[] BuildWav(int tune)
+        {
+            tune = Math.Max(0, Math.Min(TuneFreqs.Length - 1, tune));
+            double[] freqs = TuneFreqs[tune];
+            int[] ms = TuneMs[tune];
 
             MemoryStream pcm = new MemoryStream();
             for (int n = 0; n < freqs.Length; n++)
@@ -55,10 +83,16 @@ namespace WinUsage
 
         public static void Play()
         {
+            Play(0);
+        }
+
+        public static void Play(int tune)
+        {
             try
             {
-                if (player == null) player = new SoundPlayer(new MemoryStream(BuildWav()));
-                player.Play();   // asincrono: non blocca l'interfaccia
+                tune = Math.Max(0, Math.Min(TuneFreqs.Length - 1, tune));
+                if (players[tune] == null) players[tune] = new SoundPlayer(new MemoryStream(BuildWav(tune)));
+                players[tune].Play();   // asincrono: non blocca l'interfaccia
             }
             catch (Exception ex)
             {

@@ -11,7 +11,7 @@ namespace WinUsage.Tests
         private static int failures;
         private static int checks;
 
-        private static void Eq(object expected, object actual, string what)
+        internal static void Eq(object expected, object actual, string what)
         {
             checks++;
             if (!object.Equals(expected, actual))
@@ -298,6 +298,8 @@ namespace WinUsage.Tests
             rs.RetentionDays = 180; rs.Save(sm);
             Eq(180, AppSettings.Load(sm).RetentionDays, "conservazione: 180 giorni salvati");
             sm.Dispose();
+
+            RemoteTests.Run(dir);
 
             try { Directory.Delete(dir, true); } catch { }
             Console.WriteLine();

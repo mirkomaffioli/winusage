@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Text;
 
 namespace WinUsage
 {
@@ -70,14 +71,36 @@ namespace WinUsage
             return d;
         }
 
+        /// <summary>Maiuscole; le vocali accentate diventano vocale + apostrofo, come si scrive in maiuscolo senza accenti.</summary>
         public static string Normalize(string text)
         {
-            return (text ?? "").ToUpperInvariant();
+            StringBuilder sb = new StringBuilder();
+            foreach (char ch in (text ?? "").ToUpperInvariant())
+            {
+                switch (ch)
+                {
+                    case 'À': case 'Á': sb.Append("A'"); break;
+                    case 'È': case 'É': sb.Append("E'"); break;
+                    case 'Ì': case 'Í': sb.Append("I'"); break;
+                    case 'Ò': case 'Ó': sb.Append("O'"); break;
+                    case 'Ù': case 'Ú': sb.Append("U'"); break;
+                    default: sb.Append(ch); break;
+                }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>Vero se tutti i caratteri (dopo <see cref="Normalize"/>) hanno un glifo.</summary>
+        public static bool CanDraw(string text)
+        {
+            foreach (char c in Normalize(text)) if (!Glyphs.ContainsKey(c)) return false;
+            return true;
         }
 
         public static int Measure(string text, int scale)
         {
-            if (string.IsNullOrEmpty(text)) return 0;
+            text = Normalize(text);
+            if (text.Length == 0) return 0;
             return (text.Length * Advance - 1) * scale;
         }
 
@@ -189,6 +212,29 @@ namespace WinUsage
 
         private static Bitmap BuildBase(string line1, string big, string tag)
         {
+            Bitmap b = BuildSea(W, H);
+            using (Graphics g = Graphics.FromImage(b))
+            {
+                g.SmoothingMode = SmoothingMode.None;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                Color shadow = Color.FromArgb(8, 24, 52);
+
+                PixelFont.DrawShadow(g, line1, TextX, 9, Color.FromArgb(190, 235, 255), shadow, 1);
+
+                int scale = PixelFont.Measure(big, 2) <= TextWidth ? 2 : 1;
+                PixelFont.DrawShadow(g, big, TextX, 21, Color.FromArgb(255, 214, 90), Color.FromArgb(138, 90, 26), scale);
+
+                PixelFont.DrawShadow(g, tag, TextX, 43, Color.FromArgb(120, 232, 200), shadow, 1);
+            }
+            return b;
+        }
+
+        /// <summary>
+        /// Fondale marino a bande con sabbia e cornice smussata (angoli trasparenti con <see cref="Key"/>): lo sfondo comune
+        /// di tutte le notifiche pixel art.
+        /// </summary>
+        public static Bitmap BuildSea(int W, int H)
+        {
             Color[] bands =
             {
                 Color.FromArgb(30, 100, 170), Color.FromArgb(24, 82, 150), Color.FromArgb(20, 68, 132),
@@ -197,7 +243,7 @@ namespace WinUsage
             Color sand = Color.FromArgb(230, 201, 140), sand2 = Color.FromArgb(196, 164, 104);
             Color navy = Color.FromArgb(11, 29, 58);
             Color light = Color.FromArgb(124, 200, 240), dark = Color.FromArgb(8, 26, 56);
-            int seaBottom = 57;
+            int seaBottom = H - 7;
 
             Bitmap b = new Bitmap(W, H, PixelFormat.Format32bppArgb);
             for (int y = 0; y < H; y++)
@@ -240,20 +286,6 @@ namespace WinUsage
                 b.SetPixel(W - 1 - p[0], H - 1 - p[1], Key);
             }
             b.SetPixel(1, 1, navy); b.SetPixel(W - 2, 1, navy); b.SetPixel(1, H - 2, navy); b.SetPixel(W - 2, H - 2, navy);
-
-            using (Graphics g = Graphics.FromImage(b))
-            {
-                g.SmoothingMode = SmoothingMode.None;
-                g.PixelOffsetMode = PixelOffsetMode.Half;
-                Color shadow = Color.FromArgb(8, 24, 52);
-
-                PixelFont.DrawShadow(g, line1, TextX, 9, Color.FromArgb(190, 235, 255), shadow, 1);
-
-                int scale = PixelFont.Measure(big, 2) <= TextWidth ? 2 : 1;
-                PixelFont.DrawShadow(g, big, TextX, 21, Color.FromArgb(255, 214, 90), Color.FromArgb(138, 90, 26), scale);
-
-                PixelFont.DrawShadow(g, tag, TextX, 43, Color.FromArgb(120, 232, 200), shadow, 1);
-            }
             return b;
         }
 

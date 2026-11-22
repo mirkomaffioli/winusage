@@ -6,6 +6,6 @@ cd "$(dirname "$0")"
 mkdir -p bin
 mcs -langversion:5 -target:winexe -optimize+ -out:bin/WinUsage.exe \
   -win32icon:app.ico -win32manifest:app.manifest -resource:app.ico,WinUsage.app.ico \
-  -r:System.dll -r:System.Windows.Forms.dll -r:System.Drawing.dll \
+  -r:System.dll -r:System.Windows.Forms.dll -r:System.Drawing.dll -r:System.Web.Extensions.dll -r:System.Security.dll \
   src/*.cs
 echo "OK: bin/WinUsage.exe"

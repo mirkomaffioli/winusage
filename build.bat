@@ -18,7 +18,7 @@ if not exist bin mkdir bin
 
 "%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ /out:bin\WinUsage.exe ^
   /win32icon:app.ico /win32manifest:app.manifest /resource:app.ico,WinUsage.app.ico ^
-  /reference:System.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll ^
+  /reference:System.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:System.Security.dll ^
   src\*.cs
 if errorlevel 1 (
   echo Compilazione fallita.

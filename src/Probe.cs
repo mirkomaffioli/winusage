@@ -171,6 +171,9 @@ namespace WinUsage
         private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string ValueName = "WinUsage";
 
+        /// <summary>Argomento aggiunto all'avvio automatico: così il messaggio al telefono distingue l'accensione dall'avvio a mano.</summary>
+        public const string Argument = "--autostart";
+
         public static void Apply(bool enabled)
         {
             try
@@ -180,7 +183,7 @@ namespace WinUsage
                     if (k == null) return;
                     if (enabled)
                     {
-                        string cmd = "\"" + System.Windows.Forms.Application.ExecutablePath + "\"";
+                        string cmd = "\"" + System.Windows.Forms.Application.ExecutablePath + "\" " + Argument;
                         object current = k.GetValue(ValueName);
                         if (current == null || !string.Equals(current.ToString(), cmd, StringComparison.OrdinalIgnoreCase))
                             k.SetValue(ValueName, cmd);
