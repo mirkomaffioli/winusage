@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
@@ -11,9 +12,17 @@ namespace WinUsage
     {
         private readonly RemoteService service;
         private readonly RemoteSettings working;
-        private string totpSecret;         // segreto in preparazione (salvato solo con Salva)
-        private bool totpVerified;
-        private bool totpChanged;
+
+        /// <summary>Segreto Authenticator in preparazione per un telefono (salvato solo con Salva, e solo se verificato).</summary>
+        private sealed class TotpDraft
+        {
+            public string Secret = "";
+            public bool Verified;
+            public bool Changed;
+        }
+
+        private readonly Dictionary<long, TotpDraft> drafts = new Dictionary<long, TotpDraft>();
+        private string phonesSignature = "";
 
         private readonly Label lblStatus = new Label();
         private readonly CheckBox chkEnabled = new CheckBox();
@@ -23,6 +32,8 @@ namespace WinUsage
         private readonly Label lblPairInfo = new Label();
         private readonly Button btnPair = new Button();
         private readonly Button btnUnpair = new Button();
+        private readonly ListView phonesView = new ListView();
+        private readonly ComboBox cmbPhone = new ComboBox();
 
         private readonly Label lblTotp = new Label();
         private readonly PictureBox picQr = new PictureBox();
@@ -60,8 +71,7 @@ namespace WinUsage
             this.service = service;
             working = service.SettingsCopy;
             RemoteSecrets s = service.SecretsCopy;
-            totpSecret = s.TotpSecret;
-            totpVerified = s.TotpVerified;
+            SyncDrafts(s);
 
             Text = "WinUsage - Controllo remoto (Telegram)";
             if (icon != null) Icon = icon;
@@ -225,24 +235,40 @@ namespace WinUsage
             lblToken.Margin = new Padding(3, 2, 3, 6);
             p.Controls.Add(lblToken);
 
-            p.Controls.Add(Title("2. Abbinamento del telefono"));
-            p.Controls.Add(Note("Premi Avvia abbinamento (salva e attiva il controllo remoto), poi scrivi al bot entro 5 minuti " +
-                                "/abbina seguito dal codice. Il PC chiede conferma prima di accettare.", w));
-            btnPair.Text = "Avvia abbinamento";
+            p.Controls.Add(Title("2. Telefoni abbinati (fino a " + RemoteSecrets.MaxPhones + ")"));
+            p.Controls.Add(Note("Premi Aggiungi telefono (salva e attiva il controllo remoto), poi dal telefono da aggiungere scrivi " +
+                                "al bot entro 5 minuti /abbina seguito dal codice. Il PC chiede conferma prima di accettare, e " +
+                                "gli altri telefoni ricevono un avviso. Tutti i telefoni possono usare tutti i comandi; ognuno " +
+                                "ha il suo codice Authenticator (scheda Codice). Avvisi e chat arrivano a tutti.", w));
+            phonesView.View = View.Details;
+            phonesView.FullRowSelect = true;
+            phonesView.HideSelection = false;
+            phonesView.MultiSelect = false;
+            phonesView.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+            phonesView.Columns.Add("Telefono (nome Telegram)", 220);
+            phonesView.Columns.Add("Account", 110);
+            phonesView.Columns.Add("Codice", 150);
+            phonesView.Size = new Size(500, 118);
+            phonesView.SelectedIndexChanged += delegate { btnUnpair.Enabled = phonesView.SelectedItems.Count > 0; };
+            p.Controls.Add(phonesView);
+            btnPair.Text = "Aggiungi telefono";
             btnPair.AutoSize = true;
             btnPair.Click += delegate { StartPairing(); };
-            btnUnpair.Text = "Rimuovi abbinamento";
+            btnUnpair.Text = "Rimuovi telefono";
             btnUnpair.AutoSize = true;
+            btnUnpair.Enabled = false;
             btnUnpair.Click += delegate
             {
-                if (MessageBox.Show(this, "Rimuovere il telefono abbinato? Servirà un nuovo abbinamento e un nuovo codice Authenticator.",
+                if (phonesView.SelectedItems.Count == 0) return;
+                long id = (long)phonesView.SelectedItems[0].Tag;
+                RemoteSecrets cur = service.SecretsCopy;
+                if (MessageBox.Show(this, "Rimuovere " + cur.NameOf(id) + "? Il suo codice Authenticator smetterà di funzionare e " +
+                                    "per usarlo di nuovo servirà un nuovo abbinamento. Gli altri telefoni ricevono un avviso.",
                                     "WinUsage", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                service.Unpair();
-                totpSecret = "";
-                totpVerified = false;
-                totpChanged = false;
-                RefreshTotp();
+                service.RemovePhone(id);
+                drafts.Remove(id);
                 RefreshState();
+                RefreshTotp();
             };
             p.Controls.Add(Row(btnPair, btnUnpair));
             lblPairCode.AutoSize = true;
@@ -268,9 +294,14 @@ namespace WinUsage
             FlowLayoutPanel p = Page(tab);
             int w = 560;
             p.Controls.Add(Title("Codice dell'app Authenticator"));
-            p.Controls.Add(Note("Serve per i comandi protetti (di solito /blocca e /spegni). Genera un segreto, inquadra il QR con " +
-                                "Google Authenticator, Microsoft Authenticator o un'app simile, poi scrivi qui il codice che " +
-                                "mostra per verificarlo. Il PC non chiede mai il codice in chat: lo scrivi tu nei comandi.", w));
+            p.Controls.Add(Note("Serve per i comandi protetti (di solito /blocca e /spegni). Ogni telefono ha il suo: scegli il " +
+                                "telefono, genera un segreto, inquadra il QR con l'app Authenticator di QUEL telefono (Google " +
+                                "Authenticator, Microsoft Authenticator o simili), poi scrivi qui il codice che mostra per " +
+                                "verificarlo. Il PC non chiede mai il codice in chat: lo scrivi tu nei comandi.", w));
+            cmbPhone.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbPhone.Width = 300;
+            cmbPhone.SelectedIndexChanged += delegate { RefreshTotp(); };
+            p.Controls.Add(Row(Inline("Telefono:"), cmbPhone));
             lblTotp.AutoSize = true;
             lblTotp.Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold);
             p.Controls.Add(lblTotp);
@@ -279,11 +310,17 @@ namespace WinUsage
             gen.AutoSize = true;
             gen.Click += delegate
             {
-                if (totpVerified && MessageBox.Show(this, "Il codice attuale smetterà di funzionare. Continuare?", "WinUsage",
-                                                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                totpSecret = Base32.Encode(Totp.NewSecret());
-                totpVerified = false;
-                totpChanged = true;
+                TotpDraft d = CurrentDraft();
+                if (d == null)
+                {
+                    MessageBox.Show(this, "Prima abbina un telefono (scheda Collegamento).", "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                if (d.Verified && MessageBox.Show(this, "Il codice attuale di questo telefono smetterà di funzionare. Continuare?", "WinUsage",
+                                                  MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                d.Secret = Base32.Encode(Totp.NewSecret());
+                d.Verified = false;
+                d.Changed = true;
                 RefreshTotp();
             };
             p.Controls.Add(gen);
@@ -300,11 +337,12 @@ namespace WinUsage
             check.AutoSize = true;
             check.Click += delegate
             {
-                byte[] secret = Base32.Decode(totpSecret);
+                TotpDraft d = CurrentDraft();
+                byte[] secret = d != null ? Base32.Decode(d.Secret) : null;
                 if (secret != null && Totp.Verify(secret, txtVerify.Text.Trim(), DateTime.UtcNow, -1) >= 0)
                 {
-                    totpVerified = true;
-                    totpChanged = true;
+                    d.Verified = true;
+                    d.Changed = true;
                     txtVerify.Clear();
                     RefreshTotp();
                 }
@@ -385,7 +423,7 @@ namespace WinUsage
             logView.View = View.Details;
             logView.FullRowSelect = true;
             logView.Columns.Add("Ora", 120);
-            logView.Columns.Add("Mittente", 90);
+            logView.Columns.Add("Mittente", 110);
             logView.Columns.Add("Comando", 150);
             logView.Columns.Add("Esito", 260);
             Button refresh = new Button();
@@ -401,12 +439,13 @@ namespace WinUsage
 
         private void LoadLog()
         {
+            RemoteSecrets names = service.SecretsCopy;   // id dei telefoni abbinati → nome
             logView.BeginUpdate();
             logView.Items.Clear();
             foreach (RemoteLogEntry e in service.RecentLog(300))
             {
                 ListViewItem it = new ListViewItem(e.TimeUtc.ToLocalTime().ToString("dd/MM HH:mm:ss", CultureInfo.InvariantCulture));
-                it.SubItems.Add(e.SenderId == 0 ? "PC" : e.SenderId.ToString(CultureInfo.InvariantCulture));
+                it.SubItems.Add(e.SenderId == 0 ? "PC" : names.NameOf(e.SenderId));
                 it.SubItems.Add(e.Command);
                 it.SubItems.Add(e.Result);
                 logView.Items.Add(it);
@@ -426,19 +465,19 @@ namespace WinUsage
             else if (!s.HasToken) { status = "Non configurato"; color = SystemColors.GrayText; }
             else if (!service.Enabled) { status = "Disattivato"; color = SystemColors.GrayText; }
             else if (!s.Paired) { status = "In ascolto: nessun telefono abbinato"; color = Color.DarkOrange; }
-            else status = "✔ Abbinato a " + s.UserName;
+            else status = s.Phones.Count == 1 ? "✔ Abbinato a " + s.Phones[0].Label : "✔ " + s.Phones.Count + " telefoni abbinati";
             lblStatus.Text = status;
             lblStatus.ForeColor = color;
-            btnUnpair.Enabled = s.Paired;
-            btnPair.Enabled = !s.Paired;
+            SyncPhones(s);
+            btnUnpair.Enabled = phonesView.SelectedItems.Count > 0;
+            btnPair.Enabled = s.CanAddPhone && !service.PairingOpen;
             if (chkEnabled.Checked != service.Enabled && !chkEnabled.Focused && !service.Enabled && working.Enabled)
             {
                 chkEnabled.Checked = false;   // disattivato dal telefono con /stop
                 working.Enabled = false;
             }
 
-            if (s.Paired) { lblPairCode.Text = ""; lblPairInfo.Text = ""; }
-            else if (service.PairingOpen)
+            if (service.PairingOpen)
             {
                 int left = (int)Math.Max(0, (service.PairingUntilUtc - DateTime.UtcNow).TotalSeconds);
                 lblPairInfo.Text = "Scrivi al bot:  /abbina " + lblPairCode.Text.Trim() + "   (scade tra " + (left / 60) + ":" +
@@ -447,16 +486,104 @@ namespace WinUsage
             else if (lblPairCode.Text.Length > 0)
             {
                 lblPairCode.Text = "";
-                lblPairInfo.Text = "Abbinamento scaduto o chiuso: premi di nuovo Avvia abbinamento.";
+                lblPairInfo.Text = "Abbinamento concluso, scaduto o chiuso. Per un altro telefono premi di nuovo Aggiungi telefono.";
             }
+        }
+
+        /// <summary>Bozze dei codici: una per telefono abbinato (nuovi telefoni aggiunti, rimossi tolti).</summary>
+        private void SyncDrafts(RemoteSecrets s)
+        {
+            foreach (PairedPhone p in s.Phones)
+            {
+                if (drafts.ContainsKey(p.Id)) continue;
+                TotpDraft d = new TotpDraft();
+                d.Secret = p.TotpSecret;
+                d.Verified = p.TotpVerified;
+                drafts[p.Id] = d;
+            }
+            List<long> gone = new List<long>();
+            foreach (long id in drafts.Keys) if (!s.IsPaired(id)) gone.Add(id);
+            foreach (long id in gone) drafts.Remove(id);
+        }
+
+        /// <summary>Elenco dei telefoni e scelta nella scheda Codice, ricostruiti solo quando cambiano.</summary>
+        private void SyncPhones(RemoteSecrets s)
+        {
+            SyncDrafts(s);
+            System.Text.StringBuilder sig = new System.Text.StringBuilder();
+            foreach (PairedPhone p in s.Phones)
+                sig.Append(p.Id).Append('|').Append(p.Label).Append('|').Append(CodeLabel(p.Id)).Append(';');
+            if (sig.ToString() == phonesSignature) return;
+            phonesSignature = sig.ToString();
+
+            long selected = phonesView.SelectedItems.Count > 0 ? (long)phonesView.SelectedItems[0].Tag : 0;
+            phonesView.BeginUpdate();
+            phonesView.Items.Clear();
+            foreach (PairedPhone p in s.Phones)
+            {
+                ListViewItem it = new ListViewItem(p.Label);
+                it.SubItems.Add(p.Id.ToString(CultureInfo.InvariantCulture));
+                it.SubItems.Add(CodeLabel(p.Id));
+                it.Tag = p.Id;
+                it.Selected = p.Id == selected;
+                phonesView.Items.Add(it);
+            }
+            phonesView.EndUpdate();
+
+            long chosen = cmbPhone.SelectedItem is PhoneItem ? ((PhoneItem)cmbPhone.SelectedItem).Id : 0;
+            cmbPhone.BeginUpdate();
+            cmbPhone.Items.Clear();
+            foreach (PairedPhone p in s.Phones)
+            {
+                PhoneItem pi = new PhoneItem(p.Id, p.Label);
+                cmbPhone.Items.Add(pi);
+                if (p.Id == chosen) cmbPhone.SelectedItem = pi;
+            }
+            if (cmbPhone.SelectedIndex < 0 && cmbPhone.Items.Count > 0) cmbPhone.SelectedIndex = 0;
+            cmbPhone.EndUpdate();
+            RefreshTotp();
+        }
+
+        private string CodeLabel(long id)
+        {
+            TotpDraft d;
+            if (!drafts.TryGetValue(id, out d) || Base32.Decode(d.Secret) == null || d.Secret.Length == 0) return "da configurare";
+            if (!d.Verified) return "da verificare";
+            return d.Changed ? "verificato (premi Salva)" : "✔ configurato";
+        }
+
+        private sealed class PhoneItem
+        {
+            public readonly long Id;
+            private readonly string label;
+            public PhoneItem(long id, string label) { Id = id; this.label = label; }
+            public override string ToString() { return label; }
+        }
+
+        private TotpDraft CurrentDraft()
+        {
+            PhoneItem pi = cmbPhone.SelectedItem as PhoneItem;
+            TotpDraft d;
+            return pi != null && drafts.TryGetValue(pi.Id, out d) ? d : null;
         }
 
         private void RefreshTotp()
         {
+            TotpDraft d = CurrentDraft();
+            if (d == null)
+            {
+                lblTotp.Text = "Nessun telefono abbinato";
+                lblTotp.ForeColor = SystemColors.GrayText;
+                SetQr(null);
+                lblSecret.Text = "";
+                return;
+            }
+            string totpSecret = d.Secret;
+            bool totpVerified = d.Verified, totpChanged = d.Changed;
             byte[] secret = Base32.Decode(totpSecret);
             if (secret == null || secret.Length < 10)
             {
-                lblTotp.Text = "Non configurato";
+                lblTotp.Text = "Non configurato per questo telefono";
                 lblTotp.ForeColor = SystemColors.GrayText;
                 SetQr(null);
                 lblSecret.Text = "";
@@ -467,7 +594,7 @@ namespace WinUsage
             lblTotp.ForeColor = totpVerified ? Color.DarkGreen : Color.DarkOrange;
             if (totpChanged && !totpVerified)
             {
-                SetQr(QrCode.Encode(Totp.ProvisioningUri(secret, Environment.MachineName)));
+                SetQr(QrCode.Encode(Totp.ProvisioningUri(secret, Environment.MachineName)));   // stesso nome: ogni telefono ha solo il suo
                 string b32 = totpSecret;
                 System.Text.StringBuilder sb = new System.Text.StringBuilder("Chiave per l'inserimento manuale: ");
                 for (int i = 0; i < b32.Length; i += 4) sb.Append(b32.Substring(i, Math.Min(4, b32.Length - i))).Append(' ');
@@ -510,10 +637,17 @@ namespace WinUsage
             }
             RemoteSecrets s = service.SecretsCopy;   // l'abbinamento lo gestisce il servizio: si parte dalla sua copia
             s.Token = token;
-            if (totpChanged && totpVerified)   // un segreto nuovo non verificato non sostituisce quello attuale
+            bool unverified = false;
+            foreach (PairedPhone p in s.Phones)
             {
-                s.TotpSecret = totpSecret;
-                s.TotpVerified = true;
+                TotpDraft d;
+                if (!drafts.TryGetValue(p.Id, out d) || !d.Changed) continue;
+                if (d.Verified)   // un segreto nuovo non verificato non sostituisce quello attuale
+                {
+                    p.TotpSecret = d.Secret;
+                    p.TotpVerified = true;
+                }
+                else if (d.Secret.Length > 0 && Base32.Decode(d.Secret) != null) unverified = true;
             }
             s.CodeScreenshot = chkCodeScreenshot.Checked;
             s.CodeApp = chkCodeApp.Checked;
@@ -539,16 +673,16 @@ namespace WinUsage
             working.Sounds = chkSounds.Checked;
             working.ChatHistory = chkChatHistory.Checked;
 
-            if (totpChanged && !totpVerified && Base32.Decode(totpSecret) != null && totpSecret.Length > 0)
+            if (unverified)
             {
-                if (MessageBox.Show(this, "Il nuovo segreto dell'Authenticator non è stato verificato e non verrà salvato. Continuare?",
+                if (MessageBox.Show(this, "Un nuovo segreto dell'Authenticator non è stato verificato e non verrà salvato. Continuare?",
                                     "WinUsage", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
             }
 
             try
             {
                 service.ApplyConfig(s, working.Clone());
-                if (totpVerified) totpChanged = false;
+                foreach (TotpDraft d in drafts.Values) if (d.Verified) d.Changed = false;
                 RefreshTotp();
                 return true;
             }

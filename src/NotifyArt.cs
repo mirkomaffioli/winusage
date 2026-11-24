@@ -25,6 +25,8 @@ namespace WinUsage
         public string Big = "";
         public string Line3 = "";
         public string FreeText;              // testo libero (non null = disegnato dalla finestra in TextArea)
+        public static readonly Color TextPanel = Color.FromArgb(14, 40, 78);   // fondo del riquadro del testo libero
+
         public string Button;                // etichetta del pulsante, o null
         public string Button2;               // secondo pulsante (a sinistra del primo, arancione), o null
         public double Level = 1.0;           // bombola del conto alla rovescia: 1 piena, 0 vuota
@@ -135,7 +137,7 @@ namespace WinUsage
                 // riquadro scuro dove la finestra scrive il testo libero
                 Rectangle a = TextArea;
                 using (Brush navy = new SolidBrush(Navy))
-                using (Brush panel = new SolidBrush(Color.FromArgb(14, 40, 78)))
+                using (Brush panel = new SolidBrush(TextPanel))
                 {
                     g.FillRectangle(navy, a.X - 2, a.Y - 1, a.Width + 4, a.Height + 2);
                     g.FillRectangle(navy, a.X - 1, a.Y - 2, a.Width + 2, a.Height + 4);

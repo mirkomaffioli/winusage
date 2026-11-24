@@ -140,7 +140,7 @@ namespace WinUsage
         {
             Dictionary<string, string> f = new Dictionary<string, string>();
             f["chat_id"] = chatId.ToString(CultureInfo.InvariantCulture);
-            f["text"] = text.Length > 4000 ? text.Substring(0, 4000) : text;
+            f["text"] = TextCut.Cut(text, 4000);
             f["disable_web_page_preview"] = "true";
             return Long(AsObject(Call("sendMessage", f, timeoutMs)), "message_id");
         }
@@ -184,15 +184,17 @@ namespace WinUsage
         }
 
         /// <summary>Uri.EscapeDataString ha un limite di lunghezza nelle versioni vecchie: si codifica a pezzi.</summary>
-        private static string EscapeLong(string s)
+        internal static string EscapeLong(string s)
         {
             if (s.Length <= 2000) return Uri.EscapeDataString(s);
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < s.Length; i += 2000)
+            int i = 0;
+            while (i < s.Length)
             {
-                int len = Math.Min(2000, s.Length - i);
-                if (char.IsHighSurrogate(s[i + len - 1]) && i + len < s.Length) len++;
+                // un'emoji (coppia surrogata) non si spezza tra due pezzi: EscapeDataString rifiuta le metà
+                int len = TextCut.SafeLength(s, i, 2000);
                 sb.Append(Uri.EscapeDataString(s.Substring(i, len)));
+                i += len;
             }
             return sb.ToString();
         }
