@@ -300,6 +300,9 @@ namespace WinUsage
         public bool NotifyCountdown = true;
         public bool Sounds = true;
 
+        // chat
+        public bool ChatHistory = true;            // cronologia in memoria fino al riavvio; false = sparisce alla chiusura
+
         public const int MinShutdownMinutes = 1;
         public const int MaxShutdownMinutes = 120;
 
@@ -327,6 +330,7 @@ namespace WinUsage
             s.NotifyLocked = B(st, "remote_notify_locked", s.NotifyLocked);
             s.NotifyCountdown = B(st, "remote_notify_countdown", s.NotifyCountdown);
             s.Sounds = B(st, "remote_sounds", s.Sounds);
+            s.ChatHistory = B(st, "remote_chat_history", s.ChatHistory);
             return s;
         }
 
@@ -348,6 +352,7 @@ namespace WinUsage
             st.SetSetting("remote_notify_locked", NotifyLocked ? "1" : "0");
             st.SetSetting("remote_notify_countdown", NotifyCountdown ? "1" : "0");
             st.SetSetting("remote_sounds", Sounds ? "1" : "0");
+            st.SetSetting("remote_chat_history", ChatHistory ? "1" : "0");
         }
 
         private static bool B(Storage st, string key, bool def)
@@ -524,6 +529,50 @@ namespace WinUsage
     }
 
     internal enum CountdownEvent { None, Expired }
+
+    /// <summary>Un messaggio della chat: testo, direzione e ora (UTC).</summary>
+    internal sealed class ChatEntry
+    {
+        public readonly string Text;
+        public readonly bool Outgoing;     // true = scritto sul PC
+        public readonly DateTime Utc;
+
+        public ChatEntry(string text, bool outgoing, DateTime utc)
+        {
+            Text = text;
+            Outgoing = outgoing;
+            Utc = utc;
+        }
+    }
+
+    /// <summary>
+    /// Cronologia della chat, solo in memoria: non va mai nel database, quindi sparisce quando WinUsage si chiude (riavvio
+    /// del PC compreso). Tiene gli ultimi <see cref="Max"/> messaggi. Con la cronologia disattivata contiene solo i
+    /// messaggi arrivati a chat chiusa, che si vedono all'apertura e poi si cancellano.
+    /// </summary>
+    internal sealed class ChatHistory
+    {
+        public const int Max = 500;
+        private readonly List<ChatEntry> entries = new List<ChatEntry>();
+
+        public int Count { get { return entries.Count; } }
+
+        public void Add(string text, bool outgoing, DateTime utc)
+        {
+            entries.Add(new ChatEntry(text, outgoing, utc));
+            if (entries.Count > Max) entries.RemoveRange(0, entries.Count - Max);
+        }
+
+        public List<ChatEntry> Snapshot()
+        {
+            return new List<ChatEntry>(entries);
+        }
+
+        public void Clear()
+        {
+            entries.Clear();
+        }
+    }
 
     /// <summary>
     /// Conto alla rovescia dello spegnimento. Lo standby vero (evento di sospensione di Windows) lo annulla, così il PC

@@ -57,7 +57,7 @@ namespace WinUsage
         // chat
         private RemoteChatForm chatForm;
         private bool chatClosingSilently;             // chiusura decisa dall'app (abbinamento rimosso, /stop): niente avviso
-        private readonly List<KeyValuePair<DateTime, string>> pendingChat = new List<KeyValuePair<DateTime, string>>();
+        private readonly ChatHistory chatHistory = new ChatHistory();   // solo in memoria: sparisce alla chiusura dell'app
 
         /// <summary>Stato cambiato (attivo, abbinato...): aggiornare icona, popup e finestra di configurazione.</summary>
         public event Action StateChanged;
@@ -159,6 +159,7 @@ namespace WinUsage
             settings.Save(storage);
             NotifyCenter.Sounds = settings.Sounds;
             controller.Apply(secrets, settings);
+            if (!settings.ChatHistory && (chatForm == null || chatForm.IsDisposed)) chatHistory.Clear();
             if (tokenChanged) store.Offset = 0;
             RestartPolling();
             RaiseStateChanged();
@@ -186,7 +187,7 @@ namespace WinUsage
             secrets.Save(storage);
             controller.Apply(secrets, settings);
             CancelShutdown(false);
-            CloseChat();
+            CloseChat(true);   // un altro telefono non deve vedere la chat del precedente
             RaiseStateChanged();
         }
 
@@ -667,11 +668,13 @@ namespace WinUsage
         {
             if (chatForm == null || chatForm.IsDisposed)
             {
-                chatForm = new RemoteChatForm(secrets.UserName, icon);
+                chatForm = new RemoteChatForm(secrets.UserName, icon, settings.ChatHistory);
                 chatForm.SendRequested += SendChat;
+                chatForm.LoadHistory(chatHistory.Snapshot());
                 chatForm.FormClosed += delegate(object s, FormClosedEventArgs e)
                 {
                     chatForm = null;
+                    if (!settings.ChatHistory) chatHistory.Clear();
                     // Chiusa da chi sta al PC (CHIUDI o X): il telefono lo sa e non scrive a vuoto.
                     if (!chatClosingSilently && e.CloseReason == CloseReason.UserClosing && Active)
                     {
@@ -681,27 +684,28 @@ namespace WinUsage
                     }
                 };
             }
-            foreach (KeyValuePair<DateTime, string> kv in pendingChat) chatForm.AddIncoming(kv.Value, kv.Key);
-            pendingChat.Clear();
             chatForm.ShowChat(activate);
         }
 
-        /// <summary>Chiusura decisa dall'app (abbinamento rimosso, /stop, uscita): nessun avviso al telefono.</summary>
-        private void CloseChat()
+        /// <summary>
+        /// Chiusura decisa dall'app (abbinamento rimosso, /stop, uscita): nessun avviso al telefono. La cronologia si
+        /// cancella se richiesto (abbinamento rimosso) o se è disattivata.
+        /// </summary>
+        private void CloseChat(bool clearHistory)
         {
-            pendingChat.Clear();
             NotifyCenter.Remove(NotifyKind.ChatRequest);
             NotifyCenter.Remove(NotifyKind.ChatMessage);
             chatClosingSilently = true;
             try { if (chatForm != null && !chatForm.IsDisposed) chatForm.Close(); }
             finally { chatClosingSilently = false; }
             chatForm = null;
+            if (clearHistory || !settings.ChatHistory) chatHistory.Clear();
         }
 
         /// <summary>CHIUDI su una notifica della chat: chi sta al PC non vuole chattare adesso.</summary>
         private void RefuseChat()
         {
-            pendingChat.Clear();
+            if (!settings.ChatHistory) chatHistory.Clear();
             NotifyCenter.Remove(NotifyKind.ChatMessage);
             if (!Active) return;
             SendText(secrets.UserId, "💬 Chat rifiutata sul PC: chi è al computer non vuole chattare adesso.");
@@ -717,6 +721,7 @@ namespace WinUsage
             it.ChatId = secrets.UserId;
             it.Text = "💬 " + text;
             Enqueue(it);
+            chatHistory.Add(text, true, DateTime.UtcNow);
             Audit(0, "(chat dal PC)", text.Length + " caratteri");
             return true;
         }
@@ -845,13 +850,13 @@ namespace WinUsage
 
         public void DeliverChat(string text, DateTime sentUtc)
         {
+            chatHistory.Add(text, false, sentUtc);
             if (chatForm != null && !chatForm.IsDisposed)
             {
                 chatForm.AddIncoming(text, sentUtc);
                 chatForm.ShowChat(false);
                 return;
             }
-            pendingChat.Add(new KeyValuePair<DateTime, string>(sentUtc, text));
             if (!settings.NotifyChat) { ShowChat(false); return; }
             NotifyRequest r = new NotifyRequest();
             r.Kind = NotifyKind.ChatMessage;
@@ -874,7 +879,7 @@ namespace WinUsage
             settings.Save(storage);
             controller.Apply(secrets, settings);
             StopPolling();
-            CloseChat();
+            CloseChat(false);
             RaiseStateChanged();
         }
 
@@ -992,7 +997,7 @@ namespace WinUsage
             disposing.Set();
             sendQueue.CompleteAdding();
             HideCountdownUi();
-            CloseChat();
+            CloseChat(true);
         }
     }
 }

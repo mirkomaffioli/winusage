@@ -91,8 +91,10 @@ connessioni HTTPS in uscita verso `api.telegram.org` (nessuna porta aperta, ness
 Quali comandi chiedono il codice si sceglie nella scheda *Comandi*.
 
 **Chat**: dal pulsante *CHAT* del popup o con `/chat` dal telefono. Destinatario fisso (il telefono abbinato),
-nessuna cronologia: i messaggi stanno solo in memoria e spariscono alla chiusura. Un messaggio arrivato a chat
-chiusa compare come notifica con *APRI CHAT*. Chi sta al PC e non vuole chattare preme *CHIUDI* (sulla notifica o
+cronologia attiva di default: riaprendo la chat si ritrovano i messaggi già scambiati, anche quelli arrivati a chat
+chiusa. La cronologia sta solo in memoria, mai sul disco, quindi sparisce quando WinUsage si chiude o il PC si
+riavvia (e quando si rimuove l'abbinamento). Disattivandola (*Messaggi e notifiche* → *Chat*) i messaggi spariscono a
+ogni chiusura della finestra. Un messaggio arrivato a chat chiusa compare come notifica con *APRI CHAT*. Chi sta al PC e non vuole chattare preme *CHIUDI* (sulla notifica o
 nella finestra della chat, oppure chiude con la X): il telefono riceve "chat rifiutata" o "chat chiusa sul PC".
 Se la richiesta resta senza risposta per 20 secondi, il telefono riceve "nessuno ha aperto la chat".
 
@@ -209,7 +211,7 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 
 - Compilato senza errori né avvisi con `mcs -langversion:5`, cioè con il sottoinsieme di C# del compilatore
   integrato in Windows.
-- `tests/run-tests.sh`: 223 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
+- `tests/run-tests.sh`: 245 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
   cambio utente, mezzanotte, persistenza, storico a 7 e 30 giorni, manutenzione: informazioni, verifica, pulizia,
   compattazione, backup, CSV, azzeramento, conservazione) su SQLite reale. Dalla 1.3 anche il controllo remoto:
   TOTP con i vettori della RFC 6238, Base32, QR, configurazione cifrata e alterata, coda in uscita, spegnimento
@@ -236,7 +238,7 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
   notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
   Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio) e,
   per il controllo remoto, le correzioni della 1.4.0 (cattura in pixel fisici, `InitiateShutdown` a PC bloccato,
-  PC tenuto sveglio durante il conto alla rovescia, lettura più robusta) e i pulsanti *CHIUDI* della chat.
+  PC tenuto sveglio durante il conto alla rovescia, lettura più robusta), i pulsanti *CHIUDI* e la cronologia della chat.
   `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura
