@@ -156,6 +156,24 @@ namespace WinUsage.Tests
             rs.ShutdownDefaultMinutes = 500; rs.NotifyApp = false; rs.Save(st);
             Eq(RemoteSettings.MaxShutdownMinutes, RemoteSettings.Load(st).ShutdownDefaultMinutes, "minuti limitati a 120");
             Eq(false, RemoteSettings.Load(st).NotifyApp, "notifica app salvata");
+            Eq(true, rs.ChatHistory, "cronologia della chat attiva di default");
+            rs.ChatHistory = false; rs.Save(st);
+            Eq(false, RemoteSettings.Load(st).ChatHistory, "cronologia della chat disattivata salvata");
+
+            ChatHistory ch = new ChatHistory();
+            DateTime ct = new DateTime(2026, 11, 24, 10, 0, 0, DateTimeKind.Utc);
+            ch.Add("ciao", false, ct);
+            ch.Add("ciao a te", true, ct.AddSeconds(5));
+            List<ChatEntry> snap = ch.Snapshot();
+            Eq(2, snap.Count, "cronologia: due messaggi");
+            Eq(true, !snap[0].Outgoing && snap[1].Outgoing && snap[1].Text == "ciao a te", "cronologia: ordine e direzione");
+            ch.Add("dopo", false, ct.AddSeconds(9));
+            Eq(2, snap.Count, "la copia non cambia con i messaggi nuovi");
+            for (int i = 0; i < ChatHistory.Max + 20; i++) ch.Add("m" + i, i % 2 == 0, ct.AddSeconds(10 + i));
+            Eq(ChatHistory.Max, ch.Count, "cronologia limitata a " + ChatHistory.Max + " messaggi");
+            Eq("m" + (ChatHistory.Max + 19), ch.Snapshot()[ChatHistory.Max - 1].Text, "si tengono i più recenti");
+            ch.Clear();
+            Eq(0, ch.Count, "cronologia cancellata");
 
             Console.WriteLine("[R4] Coda in uscita, registro, sessioni");
             RemoteStore store = new RemoteStore(st);

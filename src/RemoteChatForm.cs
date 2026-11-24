@@ -7,8 +7,9 @@ using System.Windows.Forms;
 namespace WinUsage
 {
     /// <summary>
-    /// Chat con il telefono abbinato, e solo con lui: il destinatario non si può cambiare. Nessuna cronologia: i messaggi
-    /// restano solo in memoria e spariscono alla chiusura della finestra. Stile pixel art come le notifiche.
+    /// Chat con il telefono abbinato, e solo con lui: il destinatario non si può cambiare. I messaggi stanno solo in memoria:
+    /// con la cronologia attiva (predefinito) la finestra riparte da quelli già scambiati finché WinUsage resta aperto,
+    /// senza cronologia spariscono alla chiusura della finestra. Stile pixel art come le notifiche.
     /// </summary>
     internal sealed class RemoteChatForm : Form
     {
@@ -26,7 +27,7 @@ namespace WinUsage
         /// <summary>Testo da inviare; il gestore restituisce false se non è stato possibile.</summary>
         public event Func<string, bool> SendRequested;
 
-        public RemoteChatForm(string userName, Icon icon)
+        public RemoteChatForm(string userName, Icon icon, bool keepHistory)
         {
             this.userName = string.IsNullOrEmpty(userName) ? "telefono" : userName;
             Text = "WinUsage - Chat con il telefono";
@@ -97,7 +98,9 @@ namespace WinUsage
             Controls.Add(bottom);
             Controls.Add(header);
 
-            AddNote("Chat solo con " + this.userName + ". Nessuna cronologia: i messaggi spariscono alla chiusura.");
+            AddNote("Chat solo con " + this.userName + ". " + (keepHistory
+                ? "I messaggi restano finché WinUsage è aperto (solo in memoria): spariscono al riavvio."
+                : "Nessuna cronologia: i messaggi spariscono alla chiusura."));
             Shown += delegate { input.Focus(); };
         }
 
@@ -121,6 +124,26 @@ namespace WinUsage
         public void AddIncoming(string text, DateTime sentUtc)
         {
             AddBubble(new ChatBubble(text, false, sentUtc.ToLocalTime()));
+        }
+
+        /// <summary>Messaggi già scambiati (cronologia), dal più vecchio.</summary>
+        public void LoadHistory(System.Collections.Generic.List<ChatEntry> entries)
+        {
+            if (entries.Count == 0) return;
+            list.SuspendLayout();
+            ChatBubble last = null;
+            foreach (ChatEntry e in entries)
+            {
+                last = new ChatBubble(e.Text, e.Outgoing, e.Utc.ToLocalTime());
+                list.Controls.Add(last);
+            }
+            list.ResumeLayout();
+            Relayout();
+            if (last != null)
+            {
+                ChatBubble target = last;
+                Shown += delegate { scroller.ScrollControlIntoView(target); };
+            }
         }
 
         private void DoSend()
@@ -227,7 +250,8 @@ namespace WinUsage
             {
                 Text = text;
                 this.outgoing = outgoing;
-                time = local.ToString("HH:mm", CultureInfo.InvariantCulture);
+                // messaggi di un altro giorno (cronologia): anche la data
+                time = local.ToString(local.Date == DateTime.Today ? "HH:mm" : "dd/MM HH:mm", CultureInfo.InvariantCulture);
                 DoubleBuffered = true;
                 Font = SystemFonts.MessageBoxFont;
             }

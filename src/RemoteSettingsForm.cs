@@ -50,6 +50,7 @@ namespace WinUsage
         private readonly CheckBox chkNLocked = new CheckBox();
         private readonly CheckBox chkNCountdown = new CheckBox();
         private readonly CheckBox chkSounds = new CheckBox();
+        private readonly CheckBox chkChatHistory = new CheckBox();
 
         private readonly ListView logView = new ListView();
         private readonly Timer pairTimer = new Timer();
@@ -330,7 +331,8 @@ namespace WinUsage
             p.Controls.Add(Row(Inline("Conto alla rovescia predefinito:"),
                                Number(numShutdown, RemoteSettings.MinShutdownMinutes, RemoteSettings.MaxShutdownMinutes, working.ShutdownDefaultMinutes),
                                Inline("minuti")));
-            p.Controls.Add(Note("Lo spegnimento non è mai forzato: un documento non salvato lo ferma.", w));
+            p.Controls.Add(Note("A PC sbloccato lo spegnimento non è forzato: un documento non salvato lo ferma. " +
+                                "A PC bloccato nessuno può salvare, quindi le app vengono chiuse.", w));
 
             p.Controls.Add(Title("Screenshot"));
             p.Controls.Add(Row(Inline("Cancella lo screenshot dalla chat dopo"), Number(numDelete, 0, 2880, working.ScreenshotDeleteMinutes),
@@ -341,8 +343,9 @@ namespace WinUsage
             p.Controls.Add(Note("Nomi dei processi separati da virgola (es. gestori di password).", w));
 
             p.Controls.Add(Title("Comandi in ritardo"));
-            p.Controls.Add(Row(Inline("Scarta i comandi più vecchi di"), Number(numMaxAge, 30, 3600, working.MaxAgeSeconds), Inline("secondi")));
-            p.Controls.Add(Note("Telegram conserva i messaggi a PC spento: un /spegni mandato ore prima non deve partire al risveglio.", w));
+            p.Controls.Add(Row(Inline("Scarta /blocca, /spegni e /sblocca più vecchi di"), Number(numMaxAge, 30, 3600, working.MaxAgeSeconds), Inline("secondi")));
+            p.Controls.Add(Note("Telegram conserva i messaggi a PC spento: un /spegni mandato ore prima non deve partire al risveglio. " +
+                                "Gli altri comandi leggono soltanto e si eseguono anche in ritardo.", w));
             return tab;
         }
 
@@ -367,6 +370,11 @@ namespace WinUsage
             p.Controls.Add(Check(chkNCountdown, "Conto alla rovescia dello spegnimento con Annulla", working.NotifyCountdown));
             p.Controls.Add(Check(chkSounds, "Suoni 8 bit", working.Sounds));
             p.Controls.Add(Note("Gli avvisi di sicurezza si vedono sempre. Il registro dei comandi è nella scheda Registro.", w));
+
+            p.Controls.Add(Title("Chat"));
+            p.Controls.Add(Check(chkChatHistory, "Tieni la cronologia della chat fino al riavvio di WinUsage", working.ChatHistory));
+            p.Controls.Add(Note("La cronologia sta solo in memoria, mai sul disco: sparisce quando WinUsage si chiude o il PC si " +
+                                "riavvia. Disattivata, i messaggi spariscono a ogni chiusura della finestra della chat.", w));
             return tab;
         }
 
@@ -529,6 +537,7 @@ namespace WinUsage
             working.NotifyLocked = chkNLocked.Checked;
             working.NotifyCountdown = chkNCountdown.Checked;
             working.Sounds = chkSounds.Checked;
+            working.ChatHistory = chkChatHistory.Checked;
 
             if (totpChanged && !totpVerified && Base32.Decode(totpSecret) != null && totpSecret.Length > 0)
             {
