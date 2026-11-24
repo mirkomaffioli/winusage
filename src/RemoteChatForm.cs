@@ -19,6 +19,7 @@ namespace WinUsage
         private readonly FlowLayoutPanel list = new FlowLayoutPanel();
         private readonly TextBox input = new TextBox();
         private readonly PixelButton send = new PixelButton("INVIA");
+        private readonly PixelButton close = new PixelButton("CHIUDI");
         private readonly string userName;
         private bool showInactive;
 
@@ -64,9 +65,20 @@ namespace WinUsage
             Panel gap = new Panel();
             gap.Dock = DockStyle.Right;
             gap.Width = 8;
+            // CHIUDI: per chi non vuole chattare. Il telefono viene avvisato (come chiudendo con la X).
+            close.Dock = DockStyle.Left;
+            close.BackColor = Navy;
+            close.Width = 84;
+            close.Danger = true;
+            close.Click += delegate { Close(); };
+            Panel gapLeft = new Panel();
+            gapLeft.Dock = DockStyle.Left;
+            gapLeft.Width = 8;
             bottom.Controls.Add(input);
             bottom.Controls.Add(gap);
             bottom.Controls.Add(send);
+            bottom.Controls.Add(gapLeft);
+            bottom.Controls.Add(close);
 
             scroller.Dock = DockStyle.Fill;
             scroller.AutoScroll = true;

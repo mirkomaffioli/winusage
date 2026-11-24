@@ -523,22 +523,24 @@ namespace WinUsage
         }
     }
 
-    internal enum CountdownEvent { None, Expired, CancelledBySleep }
+    internal enum CountdownEvent { None, Expired }
 
-    /// <summary>Conto alla rovescia dello spegnimento. Lo standby lo annulla: il PC non si spegne di colpo al risveglio.</summary>
+    /// <summary>
+    /// Conto alla rovescia dello spegnimento. Lo standby vero (evento di sospensione di Windows) lo annulla, così il PC
+    /// non si spegne di colpo al risveglio. Un'interruzione del timer senza standby (PC bloccato con lo schermo spento,
+    /// app rallentata) invece non lo annulla più: se nel frattempo è scaduto, Tick lo segnala e chi lo usa guarda il ritardo.
+    /// </summary>
     internal sealed class ShutdownCountdown
     {
         public bool Active { get; private set; }
         public DateTime DueUtc { get; private set; }
         public int TotalSeconds { get; private set; }
-        private DateTime lastTickUtc;
 
         public void Start(int minutes, DateTime nowUtc)
         {
             minutes = Math.Max(RemoteSettings.MinShutdownMinutes, Math.Min(RemoteSettings.MaxShutdownMinutes, minutes));
             TotalSeconds = minutes * 60;
             DueUtc = nowUtc.AddSeconds(TotalSeconds);
-            lastTickUtc = nowUtc;
             Active = true;
         }
 
@@ -554,22 +556,27 @@ namespace WinUsage
             return Active ? Math.Max(0, (DueUtc - nowUtc).TotalSeconds) : 0;
         }
 
+        /// <summary>Secondi passati dalla scadenza (0 se non ancora scaduto).</summary>
+        public double LateSeconds(DateTime nowUtc)
+        {
+            return Math.Max(0, (nowUtc - DueUtc).TotalSeconds);
+        }
+
         public CountdownEvent Tick(DateTime nowUtc)
         {
             if (!Active) return CountdownEvent.None;
-            double gap = (nowUtc - lastTickUtc).TotalSeconds;
-            lastTickUtc = nowUtc;
-            if (gap > UsageTracker.MaxGapSeconds || gap < -UsageTracker.MaxGapSeconds)
-            {
-                Active = false;
-                return CountdownEvent.CancelledBySleep;
-            }
             if (nowUtc >= DueUtc)
             {
                 Active = false;
                 return CountdownEvent.Expired;
             }
             return CountdownEvent.None;
+        }
+
+        /// <summary>Windows sta andando in standby: il conto alla rovescia si annulla. True se era attivo.</summary>
+        public bool CancelForSleep()
+        {
+            return Cancel();
         }
     }
 
@@ -623,6 +630,7 @@ namespace WinUsage
         DateTime StartShutdown(int minutes);           // ora locale prevista
         bool CancelShutdown(bool fromRemote);
         bool ShutdownActive { get; }
+        bool PcLocked { get; }                         // schermo bloccato (nessuno può salvare i documenti)
         void OpenChat(bool requestedRemotely);
         void DeliverChat(string text, DateTime sentUtc);
         void DisableRemote();
@@ -778,8 +786,11 @@ namespace WinUsage
                 return;
             }
 
+            // Solo i comandi che agiscono sul PC con il codice scadono: un /blocca o /spegni arrivato molto dopo non deve
+            // partire a sorpresa. Quelli che leggono soltanto (/stato, /app, /screenshot, /chat...) si eseguono anche in
+            // ritardo (dopo uno standby o una rete caduta), invece di costringere a ripeterli.
             double age = (serverNowUtc - m.DateUtc).TotalSeconds;
-            if (age > settings.MaxAgeSeconds && cmd != "annulla" && cmd != "aiuto" && cmd != "help" && cmd != "start")
+            if (age > settings.MaxAgeSeconds && ExpiresWhenLate(cmd))
             {
                 host.SendText(m.ChatId, "⌛ Comando scaduto (inviato alle " + LocalTime(m.DateUtc) + "): rimandalo se serve ancora.");
                 host.Audit(m.FromId, "/" + cmd, "scaduto");
@@ -787,6 +798,15 @@ namespace WinUsage
             }
 
             Execute(m, cmd, args, serverNowUtc);
+        }
+
+        public const string LockedShutdownNote =
+            "🔒 Il PC è bloccato: se lo è ancora alla scadenza, le app aperte verranno chiuse senza salvare.";
+
+        /// <summary>Comandi che non si eseguono se arrivano oltre il tempo massimo (quelli protetti dal codice).</summary>
+        public static bool ExpiresWhenLate(string cmd)
+        {
+            return cmd == "blocca" || cmd == "spegni" || cmd == "sblocca";
         }
 
         private void HandlePairing(IncomingMessage m, string[] args, DateTime nowUtc)
@@ -1035,7 +1055,7 @@ namespace WinUsage
 
                 case "chat":
                     host.OpenChat(true);
-                    host.SendText(chat, "💬 Chat aperta sul PC: scrivi qui i messaggi (senza /).");
+                    host.SendText(chat, "💬 Richiesta di chat mostrata sul PC: scrivi qui i messaggi (senza /). Ti avviso se la aprono o la rifiutano.");
                     host.Audit(m.FromId, "/chat", "ok");
                     break;
 
@@ -1071,7 +1091,8 @@ namespace WinUsage
                     bool replacing = host.ShutdownActive;
                     DateTime due = host.StartShutdown(minutes);
                     host.SendText(chat, "⏻ Spegnimento alle " + due.ToString("HH:mm", CultureInfo.InvariantCulture) +
-                                        (replacing ? " (sostituisce il precedente)" : "") + ". /annulla per fermarlo.");
+                                        (replacing ? " (sostituisce il precedente)" : "") + ". /annulla per fermarlo." +
+                                        (host.PcLocked ? "\n" + LockedShutdownNote : ""));
                     host.Audit(m.FromId, "/spegni " + minutes, "conto alla rovescia avviato");
                     break;
                 }

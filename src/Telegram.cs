@@ -61,11 +61,22 @@ namespace WinUsage
             // il messaggio di spegnimento, che ha solo 3 secondi, resterebbe in attesa.
             if (ServicePointManager.DefaultConnectionLimit < 8) ServicePointManager.DefaultConnectionLimit = 8;
             ServicePointManager.Expect100Continue = false;
+            // Connessioni morte senza preavviso (router, Wi-Fi, standby): il keep-alive TCP se ne accorge in pochi secondi
+            // invece di lasciare la lettura appesa fino al timeout, e le connessioni ferme da più di 30 s non si riusano
+            // (il server le ha probabilmente già chiuse e il primo invio fallirebbe).
+            try { ServicePointManager.SetTcpKeepAlive(true, 15000, 5000); } catch (Exception) { }
+            ServicePointManager.MaxServicePointIdleTime = 30000;
         }
 
         public TelegramApi(string token)
         {
             this.token = token ?? "";
+        }
+
+        /// <summary>Attesa tra i tentativi di lettura dopo un errore di rete: 1, 2, 4, 8, 15 s, poi sempre 15 s.</summary>
+        public static int NextBackoff(int seconds)
+        {
+            return Math.Min(Math.Max(1, seconds) * 2, 15);
         }
 
         /// <summary>Ora del server stimata adesso; se non c'è ancora una risposta, l'orologio del PC.</summary>

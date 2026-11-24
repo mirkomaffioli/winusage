@@ -16,11 +16,14 @@ namespace WinUsage
         public string Line3 = "";
         public string FreeText;
         public string Button;
+        public string Button2;               // secondo pulsante, a sinistra del primo (es. CHIUDI), o null
         public int Seconds = 6;              // 0 = finché non si clicca
         public int Priority;                 // 3 sicurezza, 2 conto alla rovescia, 1 messaggi, 0 il resto
         public int Tune = -1;                // jingle di ChipTune, -1 nessuno
         public Action OnClick;               // clic sulla notifica (che poi si chiude)
         public Action OnButton;              // clic sul pulsante
+        public Action OnButton2;             // clic sul secondo pulsante
+        public Action OnTimeout;             // la notifica sparisce da sola, senza clic
         public Func<NotifyArt, bool> Update; // a ogni fotogramma; false = chiudi
     }
 
@@ -121,6 +124,7 @@ namespace WinUsage
             art.Line3 = r.Line3 ?? "";
             art.FreeText = r.FreeText;
             art.Button = r.Button;
+            art.Button2 = r.Button2;
             if (r.Update != null) r.Update(art);
 
             scale = NotifyCenter.DpiScale();
@@ -158,7 +162,11 @@ namespace WinUsage
         {
             frame++;
             if (!closing && Request.Update != null && !Request.Update(art)) StartClose();
-            if (!closing && frame >= lifeFrames - SlideFrames) StartClose();
+            if (!closing && frame >= lifeFrames - SlideFrames)
+            {
+                StartClose();
+                if (Request.OnTimeout != null) { try { Request.OnTimeout(); } catch (Exception ex) { Log.Write(ex); } }
+            }
             if (closing && frame - closeFrame >= SlideFrames) { Close(); return; }
             Location = SlidePosition(frame);
             if (frame % 5 == 0) KeepOnTop();
@@ -174,15 +182,21 @@ namespace WinUsage
 
         private void OnMouseClick(object sender, MouseEventArgs e)
         {
-            Rectangle b = art.ButtonRect;
-            Rectangle hit = new Rectangle(b.X * scale, b.Y * scale, b.Width * scale, b.Height * scale);
+            if (closing) return;
             try
             {
-                if (!b.IsEmpty && hit.Contains(e.Location) && Request.OnButton != null) Request.OnButton();
+                if (Hit(art.ButtonRect, e.Location) && Request.OnButton != null) Request.OnButton();
+                else if (Hit(art.Button2Rect, e.Location)) { if (Request.OnButton2 != null) Request.OnButton2(); }
                 else if (Request.OnClick != null) Request.OnClick();
             }
             catch (Exception ex) { Log.Write(ex); }
             Close();
+        }
+
+        private bool Hit(Rectangle logical, Point p)
+        {
+            if (logical.IsEmpty) return false;
+            return new Rectangle(logical.X * scale, logical.Y * scale, logical.Width * scale, logical.Height * scale).Contains(p);
         }
 
         public void KeepOnTop()

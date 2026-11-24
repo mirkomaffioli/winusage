@@ -98,8 +98,8 @@ namespace WinUsage.Tests
             {
                 Make(NotifyKind.Screenshot, "SCREENSHOT INVIATO", "AL TELEFONO", "ALLE 15:02", null, null, 1),
                 Make(NotifyKind.AppQuery, "IL TELEFONO HA CHIESTO", "L'APP IN USO", "ALLE 15:04", null, null, 1),
-                Make(NotifyKind.ChatMessage, "MESSAGGIO DAL TELEFONO", "", "", "Ciao! A che ora finisci? Ricordati di staccare per cena", "APRI CHAT", 1),
-                Make(NotifyKind.ChatRequest, "IL TELEFONO VUOLE CHATTARE", "CHAT", "", null, "APRI CHAT", 1),
+                Make(NotifyKind.ChatMessage, "MESSAGGIO DAL TELEFONO", "", "", "Ciao! A che ora finisci? Ricordati di staccare per cena", "APRI CHAT", 1, "CHIUDI"),
+                Make(NotifyKind.ChatRequest, "IL TELEFONO VUOLE CHATTARE", "CHAT", "", null, "APRI CHAT", 1, "CHIUDI"),
                 Make(NotifyKind.LockedRemote, "BLOCCATO DAL TELEFONO", "ALLE 15:02", "BENTORNATO!", null, null, 1),
                 Make(NotifyKind.Countdown, "SPEGNIMENTO DA REMOTO", "TRA 4:59", "SALVA IL LAVORO!", null, "ANNULLA", 0.98),
                 Make(NotifyKind.Countdown, "SPEGNIMENTO DA REMOTO", "TRA 0:42", "SALVA IL LAVORO!", null, "ANNULLA", 0.14),
@@ -152,8 +152,13 @@ namespace WinUsage.Tests
 
         private static NotifyArt Make(NotifyKind kind, string title, string big, string line3, string free, string button, double level)
         {
+            return Make(kind, title, big, line3, free, button, level, null);
+        }
+
+        private static NotifyArt Make(NotifyKind kind, string title, string big, string line3, string free, string button, double level, string button2)
+        {
             NotifyArt a = new NotifyArt(kind);
-            a.Title = title; a.Big = big; a.Line3 = line3; a.FreeText = free; a.Button = button; a.Level = level;
+            a.Title = title; a.Big = big; a.Line3 = line3; a.FreeText = free; a.Button = button; a.Level = level; a.Button2 = button2;
             return a;
         }
     }
