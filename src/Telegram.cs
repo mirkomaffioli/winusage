@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace WinUsage
@@ -34,6 +35,31 @@ namespace WinUsage
         public long NextOffset;
     }
 
+    /// <summary>Quando riprovare un invio non riuscito e quando lasciar perdere (qui per poterlo provare nei test).</summary>
+    internal static class SendRetry
+    {
+        /// <summary>Risposte e messaggi non salvati nel database: dopo 3 minuti di tentativi si lascia perdere.</summary>
+        public const int MaxAgeMinutes = 3;
+
+        /// <summary>
+        /// Attesa prima del tentativo successivo: 1, 2, 4, 8, 15 s, poi sempre 15 s, come per la lettura. Con la rete che
+        /// torna, un risveglio o uno sblocco si riprova subito. Fino alla 1.6.0 l'attesa cresceva fino a 5 minuti e un
+        /// messaggio di accensione che non partiva teneva ferme per tutto quel tempo le risposte in coda dietro di lui.
+        /// </summary>
+        public static int DelaySeconds(int attempts)
+        {
+            int s = 1;
+            for (int i = 1; i < attempts && s < 15; i++) s = TelegramApi.NextBackoff(s);
+            return s;
+        }
+
+        /// <summary>Si lascia perdere? Mai per i messaggi della coda nel database, che ripartono anche al prossimo avvio.</summary>
+        public static bool GiveUp(bool persistent, DateTime createdUtc, DateTime nowUtc)
+        {
+            return !persistent && (nowUtc - createdUtc).TotalMinutes > MaxAgeMinutes;
+        }
+    }
+
     /// <summary>
     /// Client minimo della Bot API di Telegram, solo HTTPS in uscita (nessuna porta aperta sul PC).
     /// Usa solo il .NET Framework: HttpWebRequest e JavaScriptSerializer.
@@ -43,7 +69,17 @@ namespace WinUsage
         /// <summary>Indirizzo della Bot API (cambiato solo dai test, verso un server finto locale).</summary>
         internal static string BaseUrl = "https://api.telegram.org/bot";
         private readonly string token;
-        private volatile HttpWebRequest current;
+
+        // Lettura in corso (getUpdates o getWebhookInfo): l'unica richiesta che Abort() interrompe. Nella 1.6.0 c'era un
+        // solo campo per tutte le richieste e gli invii, fatti con la stessa istanza da un altro thread, lo sovrascrivevano:
+        // dopo una risposta del PC Abort() non fermava più la lettura, il thread vecchio restava vivo accanto a quello nuovo
+        // e i due si rubavano i messaggi (comandi persi e falso avviso "un altro programma sta leggendo").
+        private readonly object readLock = new object();
+        private HttpWebRequest readRequest;
+        private bool closed;
+
+        /// <summary>Gruppo di connessioni della lettura: cambia con <see cref="NewConnections"/>.</summary>
+        private static int connectionEpoch;
 
         /// <summary>Ora del server (header Date) dell'ultima risposta, con l'istante locale in cui è arrivata.</summary>
         public DateTime ServerDateUtc { get; private set; }
@@ -73,6 +109,22 @@ namespace WinUsage
             this.token = token ?? "";
         }
 
+        public string Token { get { return token; } }
+
+        /// <summary>
+        /// Dopo un risveglio, uno sblocco o un cambio di rete la connessione della lettura può essere morta senza che nessuno
+        /// lo sappia: la lettura successiva ne apre una nuova invece di riusarla.
+        /// </summary>
+        public static void NewConnections()
+        {
+            Interlocked.Increment(ref connectionEpoch);
+        }
+
+        private static bool IsRead(string method)
+        {
+            return method == "getUpdates" || method == "getWebhookInfo";
+        }
+
         /// <summary>Attesa tra i tentativi di lettura dopo un errore di rete: 1, 2, 4, 8, 15 s, poi sempre 15 s.</summary>
         public static int NextBackoff(int seconds)
         {
@@ -86,11 +138,22 @@ namespace WinUsage
             return ServerDateUtc + (DateTime.UtcNow - ServerDateReceivedUtc);
         }
 
-        /// <summary>Interrompe la richiesta in corso (long polling) per chiudere subito.</summary>
+        /// <summary>Interrompe la lettura in corso (long polling). Gli invii, anche se in corso, non vengono toccati.</summary>
         public void Abort()
         {
-            HttpWebRequest r = current;
+            HttpWebRequest r;
+            lock (readLock) r = readRequest;
             if (r != null) { try { r.Abort(); } catch (Exception) { } }
+        }
+
+        /// <summary>
+        /// Per sempre: interrompe la lettura in corso e rifiuta le prossime. Serve a chiudere un thread di lettura anche se
+        /// in quel momento sta per partire una richiesta nuova (gli invii restano possibili).
+        /// </summary>
+        public void Close()
+        {
+            lock (readLock) closed = true;
+            Abort();
         }
 
         public static string Redact(string text, string token)
@@ -223,7 +286,7 @@ namespace WinUsage
 
         private object Send(string method, string contentType, byte[] body, int timeoutMs)
         {
-            if (token.Length == 0) throw new TelegramException(401, "Token del bot mancante.");
+            if (token.Length == 0) throw new TelegramException(401, L.T("Token del bot mancante.", "Bot token missing."));
             HttpWebRequest req;
             try
             {
@@ -231,18 +294,39 @@ namespace WinUsage
             }
             catch (Exception)
             {
-                throw new TelegramException(401, "Token del bot non valido.");
+                throw new TelegramException(401, L.T("Token del bot non valido.", "Invalid bot token."));
             }
             req.Method = "POST";
             req.ContentType = contentType;
             req.Timeout = timeoutMs;
             req.ReadWriteTimeout = timeoutMs;
             req.UserAgent = "WinUsage";
-            req.KeepAlive = true;
+            bool reading = IsRead(method);
+            if (reading)
+            {
+                // La lettura tiene aperta la sua connessione da una richiesta all'altra; dopo NewConnections cambia gruppo
+                // e quindi connessione.
+                req.KeepAlive = true;
+                req.ConnectionGroupName = "read" + Volatile.Read(ref connectionEpoch).ToString(CultureInfo.InvariantCulture);
+            }
+            else
+            {
+                // Invii: ogni volta una connessione nuova. Una rimasta ferma può essere stata chiusa dal server o essere morta
+                // con la rete: il primo tentativo fallirebbe, o resterebbe appeso fino al timeout.
+                req.KeepAlive = false;
+                req.ConnectionGroupName = "send";
+            }
 
             string text;
             int status;
-            current = req;
+            if (reading)
+            {
+                lock (readLock)
+                {
+                    if (closed) throw new TelegramException(0, L.T("Lettura chiusa.", "Reading closed."));
+                    readRequest = req;
+                }
+            }
             try
             {
                 req.ContentLength = body.Length;
@@ -257,7 +341,7 @@ namespace WinUsage
             catch (WebException ex)
             {
                 HttpWebResponse resp = ex.Response as HttpWebResponse;
-                if (resp == null) throw new TelegramException(0, "Rete: " + Redact(Describe(ex), token));
+                if (resp == null) throw new TelegramException(0, L.T("Rete: ", "Network: ") + Redact(Describe(ex), token));
                 using (resp)
                 {
                     status = (int)resp.StatusCode;
@@ -267,17 +351,17 @@ namespace WinUsage
             }
             catch (IOException ex)
             {
-                throw new TelegramException(0, "Rete: " + Redact(ex.Message, token));
+                throw new TelegramException(0, L.T("Rete: ", "Network: ") + Redact(ex.Message, token));
             }
             finally
             {
-                current = null;
+                if (reading) lock (readLock) { if (readRequest == req) readRequest = null; }
             }
 
             Dictionary<string, object> json = null;
             try { json = new JavaScriptSerializer().DeserializeObject(text) as Dictionary<string, object>; }
             catch (Exception) { }
-            if (json == null) throw new TelegramException(status == 200 ? 502 : status, "Risposta non valida da Telegram (HTTP " + status + ").");
+            if (json == null) throw new TelegramException(status == 200 ? 502 : status, L.T("Risposta non valida da Telegram (HTTP ", "Invalid response from Telegram (HTTP ") + status + ").");
 
             object ok;
             if (json.TryGetValue("ok", out ok) && ok is bool && (bool)ok)

@@ -6,6 +6,61 @@ using System.Text;
 
 namespace WinUsage
 {
+    /// <summary>
+    /// Lingua dell'interfaccia (dalla 1.6): italiano o inglese. Ogni testo visibile si scrive accanto alla sua traduzione,
+    /// <c>L.T("Italiano", "English")</c>, così le due lingue non si separano mai. La lingua si sceglie all'avvio:
+    /// impostazione "language" = "auto" (segue Windows: italiano se Windows è in italiano, altrimenti inglese), "it" o "en".
+    /// Cambiarla richiede il riavvio dell'app (menu e finestre sono già costruiti).
+    /// </summary>
+    internal static class L
+    {
+        public const string SettingKey = "language";
+        public const string Auto = "auto", Italian = "it", English = "en";
+
+        /// <summary>true = inglese. Predefinito italiano (anche nei test).</summary>
+        public static bool En;
+
+        public static string T(string it, string en)
+        {
+            return En ? en : it;
+        }
+
+        /// <summary>Lingua effettiva per una scelta salvata ("auto", "it", "en").</summary>
+        public static bool ResolveEnglish(string choice, CultureInfo windows)
+        {
+            if (choice == Italian) return false;
+            if (choice == English) return true;
+            return windows == null || windows.TwoLetterISOLanguageName != "it";
+        }
+
+        public static string Choice(Storage st)
+        {
+            string v = st != null ? st.GetSetting(SettingKey, Auto) : Auto;
+            return v == Italian || v == English ? v : Auto;
+        }
+
+        public static void Init(Storage st)
+        {
+            En = ResolveEnglish(Choice(st), CultureInfo.CurrentUICulture);
+        }
+
+        /// <summary>Cultura per numeri e date mostrati (virgola decimale in italiano, punto in inglese).</summary>
+        public static CultureInfo Culture
+        {
+            get
+            {
+                try { return CultureInfo.GetCultureInfo(En ? "en-GB" : "it-IT"); }
+                catch (Exception) { return CultureInfo.InvariantCulture; }
+            }
+        }
+
+        /// <summary>Nome di un giorno della settimana nella lingua scelta.</summary>
+        public static string DayName(DateTime d)
+        {
+            return Culture.DateTimeFormat.GetDayName(d.DayOfWeek);
+        }
+    }
+
     /// <summary>I tre timer tracciati.</summary>
     internal static class TimerIds
     {
@@ -15,10 +70,10 @@ namespace WinUsage
         public const int Count = 3;
 
         public static readonly string[] Names = { "system", "browser", "steam" };
-        public static readonly string[] Labels = { "Sistema", "Browser", "Steam" };
+        public static string[] Labels { get { return new[] { L.T("Sistema", "System"), "Browser", "Steam" }; } }
     }
 
-    /// <summary>Formattazione dei tempi in italiano.</summary>
+    /// <summary>Formattazione dei tempi nella lingua scelta.</summary>
     internal static class Fmt
     {
         /// <summary>"01:30:05"</summary>
@@ -38,27 +93,27 @@ namespace WinUsage
             return string.Format(CultureInfo.InvariantCulture, "{0}s", s);
         }
 
-        /// <summary>Per il toast pixel art (solo maiuscole): "2 ORE 30 MIN", "1 ORA", "45 MIN".</summary>
+        /// <summary>Per il toast pixel art (solo maiuscole): "2 ORE 30 MIN", "1 ORA", "45 MIN" (in inglese "2 HRS 30 MIN").</summary>
         public static string ToastTime(double seconds)
         {
             long totalMin = (long)Math.Round(Math.Max(0, seconds) / 60.0);
             long h = totalMin / 60, m = totalMin % 60;
-            string hs = h == 1 ? "1 ORA" : h + " ORE";
+            string hs = h == 1 ? L.T("1 ORA", "1 HR") : h + L.T(" ORE", " HRS");   // "2 HRS 30 MIN" sta nella riga grande
             if (h == 0) return m + " MIN";
             if (m == 0) return hs;
             return hs + " " + m + " MIN";
         }
 
-        /// <summary>"1 ora e 30 minuti", "2 ore", "45 minuti" (arrotondato al minuto).</summary>
+        /// <summary>"1 ora e 30 minuti", "2 ore", "45 minuti" (arrotondato al minuto); in inglese "1 hour and 30 minutes".</summary>
         public static string Long(double seconds)
         {
             long totalMin = (long)Math.Round(Math.Max(0, seconds) / 60.0);
             long h = totalMin / 60, m = totalMin % 60;
-            string hs = h == 1 ? "1 ora" : h + " ore";
-            string ms = m == 1 ? "1 minuto" : m + " minuti";
+            string hs = h == 1 ? L.T("1 ora", "1 hour") : h + L.T(" ore", " hours");
+            string ms = m == 1 ? L.T("1 minuto", "1 minute") : m + L.T(" minuti", " minutes");
             if (h == 0) return ms;
             if (m == 0) return hs;
-            return hs + " e " + ms;
+            return hs + L.T(" e ", " and ") + ms;
         }
     }
 
@@ -101,6 +156,7 @@ namespace WinUsage
         public bool TrackSteam = true;
         public string BrowserProcesses = DefaultBrowsers;
         public int RetentionDays = 0;          // pulizia automatica: elimina i giorni più vecchi di N (0 = conserva tutto)
+        public string Language = L.Auto;       // "auto" (segue Windows), "it", "en": vale dal prossimo avvio
 
         public const int MinRetentionDays = 31;   // così lo storico a 30 giorni resta sempre completo
         public const int MaxRetentionDays = 3650;
@@ -138,6 +194,7 @@ namespace WinUsage
                 s.RetentionDays = keep <= 0 ? 0 : Math.Max(MinRetentionDays, Math.Min(MaxRetentionDays, keep));
             string br = st.GetSetting("browser_processes", null);
             if (!string.IsNullOrEmpty(br)) s.BrowserProcesses = br;
+            s.Language = L.Choice(st);
             return s;
         }
 
@@ -151,6 +208,7 @@ namespace WinUsage
             st.SetSetting("track_steam", TrackSteam ? "1" : "0");
             st.SetSetting("browser_processes", BrowserProcesses ?? DefaultBrowsers);
             st.SetSetting("retention_days", RetentionDays.ToString(CultureInfo.InvariantCulture));
+            st.SetSetting(L.SettingKey, Language == L.Italian || Language == L.English ? Language : L.Auto);
         }
 
         private static bool GetBool(Storage st, string key, bool def)
@@ -172,16 +230,9 @@ namespace WinUsage
 
         public static string Size(long bytes)
         {
-            if (bytes < 1024) return bytes + " byte";
-            if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString("0.#", Italian) + " KB";
-            return (bytes / (1024.0 * 1024.0)).ToString("0.##", Italian) + " MB";
-        }
-
-        private static readonly CultureInfo Italian = MakeItalian();
-
-        private static CultureInfo MakeItalian()
-        {
-            try { return new CultureInfo("it-IT"); } catch (Exception) { return CultureInfo.InvariantCulture; }
+            if (bytes < 1024) return bytes + L.T(" byte", " bytes");
+            if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString("0.#", L.Culture) + " KB";
+            return (bytes / (1024.0 * 1024.0)).ToString("0.##", L.Culture) + " MB";
         }
     }
 
@@ -376,7 +427,7 @@ namespace WinUsage
 
         private Db Open()
         {
-            if (db == null) throw new InvalidOperationException("Database non disponibile.");
+            if (db == null) throw new InvalidOperationException(L.T("Database non disponibile.", "Database not available."));
             return db;
         }
 
@@ -492,7 +543,7 @@ namespace WinUsage
         }
 
         /// <summary>
-        /// Esporta i totali giornalieri in CSV (separatore ";" e UTF-8 con BOM, come si aspetta Excel in italiano).
+        /// Esporta i totali giornalieri in CSV (UTF-8 con BOM; separatore ";" come si aspetta Excel in italiano, "," in inglese).
         /// </summary>
         /// <returns>Numero di giorni esportati.</returns>
         public int ExportCsv(string target)
@@ -508,15 +559,17 @@ namespace WinUsage
             }
 
             StringBuilder sb = new StringBuilder();
-            sb.Append("Giorno");
-            for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(TimerIds.Labels[t]).Append(" (hh:mm:ss)");
-            for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(TimerIds.Labels[t]).Append(" (secondi)");
+            char sep = L.En ? ',' : ';';
+            string[] labels = TimerIds.Labels;
+            sb.Append(L.T("Giorno", "Day"));
+            for (int t = 0; t < TimerIds.Count; t++) sb.Append(sep).Append(labels[t]).Append(" (hh:mm:ss)");
+            for (int t = 0; t < TimerIds.Count; t++) sb.Append(sep).Append(labels[t]).Append(L.T(" (secondi)", " (seconds)"));
             sb.Append("\r\n");
             foreach (KeyValuePair<string, long[]> kv in days)
             {
                 sb.Append(kv.Key);
-                for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(Fmt.Clock(kv.Value[t]));
-                for (int t = 0; t < TimerIds.Count; t++) sb.Append(';').Append(kv.Value[t].ToString(CultureInfo.InvariantCulture));
+                for (int t = 0; t < TimerIds.Count; t++) sb.Append(sep).Append(Fmt.Clock(kv.Value[t]));
+                for (int t = 0; t < TimerIds.Count; t++) sb.Append(sep).Append(kv.Value[t].ToString(CultureInfo.InvariantCulture));
                 sb.Append("\r\n");
             }
             File.WriteAllText(target, sb.ToString(), new UTF8Encoding(true));

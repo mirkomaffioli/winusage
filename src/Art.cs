@@ -177,14 +177,18 @@ namespace WinUsage
         private const int TextX = 52;
         private const int TextWidth = 156;
 
-        private static readonly string[] Taglines =
+        // al massimo 26 caratteri: la riga del font pixel è larga 156 pixel
+        private static string[] Taglines
         {
-            "RISALI A RESPIRARE UN PO'!",
-            "OSSIGENO IN ESAURIMENTO!",
-            "UNA PAUSA TI FA BENE!",
-            "ALZATI E FAI DUE PASSI!",
-            "STACCA GLI OCCHI, RESPIRA!"
-        };
+            get
+            {
+                return L.En
+                    ? new[] { "TIME TO COME UP FOR AIR!", "OXYGEN RUNNING LOW!", "A BREAK WILL DO YOU GOOD!",
+                              "GET UP AND STRETCH!", "REST YOUR EYES, BREATHE!" }
+                    : new[] { "RISALI A RESPIRARE UN PO'!", "OSSIGENO IN ESAURIMENTO!", "UNA PAUSA TI FA BENE!",
+                              "ALZATI E FAI DUE PASSI!", "STACCA GLI OCCHI, RESPIRA!" };
+            }
+        }
 
         private static readonly int[] Bob = { 0, 1, 0, -1 };
         private static readonly int[] BubbleX = { 2, 44, 209, 210, 46, 5 };
@@ -204,8 +208,9 @@ namespace WinUsage
 
         public ToastArt(double seconds, int taglineIndex)
         {
-            string tag = Taglines[((taglineIndex % Taglines.Length) + Taglines.Length) % Taglines.Length];
-            baseLayer = BuildBase("Stai usando il computer da", Fmt.ToastTime(seconds), tag);
+            string[] tags = Taglines;
+            string tag = tags[((taglineIndex % tags.Length) + tags.Length) % tags.Length];
+            baseLayer = BuildBase(L.T("Stai usando il computer da", "On the computer for"), Fmt.ToastTime(seconds), tag);
         }
 
         public static int TaglineCount { get { return Taglines.Length; } }

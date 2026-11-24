@@ -8,3 +8,11 @@ usage.db
 usage.db-wal
 usage.db-shm
 winusage.log
+# Firma del codice: certificati, chiavi e configurazione locale non vanno mai nel repository
+*.pfx
+*.p12
+*.key
+*.pem
+sign.env
+sign.env.bat
+certs/

@@ -154,7 +154,7 @@ namespace WinUsage
         /// <summary>Nome da mostrare (quello di Telegram, o l'id se manca).</summary>
         public string Label
         {
-            get { return string.IsNullOrEmpty(Name) || Name == "?" ? "telefono " + Id.ToString(CultureInfo.InvariantCulture) : Name; }
+            get { return string.IsNullOrEmpty(Name) || Name == "?" ? L.T("telefono ", "phone ") + Id.ToString(CultureInfo.InvariantCulture) : Name; }
         }
     }
 
@@ -962,13 +962,13 @@ namespace WinUsage
         /// </summary>
         public static string Reject(IncomingMessage m)
         {
-            if (m == null) return "vuoto";
-            if (m.ChatType != "private") return "chat non privata";
-            if (m.FromIsBot) return "mittente bot";
-            if (m.ChatId != m.FromId) return "chat diversa dal mittente";
-            if (m.Forwarded) return "messaggio inoltrato";
-            if (m.ViaBot) return "messaggio via bot";
-            if (m.Text == null) return "non testuale";
+            if (m == null) return L.T("vuoto", "empty");
+            if (m.ChatType != "private") return L.T("chat non privata", "not a private chat");
+            if (m.FromIsBot) return L.T("mittente bot", "sender is a bot");
+            if (m.ChatId != m.FromId) return L.T("chat diversa dal mittente", "chat differs from sender");
+            if (m.Forwarded) return L.T("messaggio inoltrato", "forwarded message");
+            if (m.ViaBot) return L.T("messaggio via bot", "message via bot");
+            if (m.Text == null) return L.T("non testuale", "not text");
             return null;
         }
 
@@ -979,7 +979,7 @@ namespace WinUsage
             if (reject != null)
             {
                 if (m != null && secrets.IsPaired(m.FromId))
-                    host.Audit(m.FromId, "(messaggio ignorato)", reject);
+                    host.Audit(m.FromId, L.T("(messaggio ignorato)", "(message ignored)"), reject);
                 return;
             }
 
@@ -993,7 +993,7 @@ namespace WinUsage
                 // Un telefono nuovo (il primo o uno in più) si abbina solo con il codice mostrato sul PC. Agli altri non si
                 // risponde mai: il bot non si fa riconoscere.
                 if (cmd == "abbina" && PairingOpen(serverNowUtc) && !pairingConfirmPending) HandlePairing(m, args, serverNowUtc);
-                else if (secrets.Paired) host.Audit(m.FromId, cmd != null ? "/" + cmd : "(testo)", "mittente non autorizzato, ignorato");
+                else if (secrets.Paired) host.Audit(m.FromId, cmd != null ? Cmd(cmd) : L.T("(testo)", "(text)"), L.T("mittente non autorizzato, ignorato", "unauthorised sender, ignored"));
                 return;
             }
 
@@ -1009,9 +1009,9 @@ namespace WinUsage
                 if ((serverNowUtc - floodNoticeUtc).TotalSeconds > 60)
                 {
                     floodNoticeUtc = serverNowUtc;
-                    host.SendText(m.ChatId, "Troppi comandi in poco tempo: riprova tra un minuto.");
+                    host.SendText(m.ChatId, L.T("Troppi comandi in poco tempo: riprova tra un minuto.", "Too many commands in a short time: try again in a minute."));
                 }
-                host.Audit(m.FromId, "/" + cmd, "troppi comandi, ignorato");
+                host.Audit(m.FromId, Cmd(cmd), L.T("troppi comandi, ignorato", "too many commands, ignored"));
                 return;
             }
 
@@ -1021,16 +1021,18 @@ namespace WinUsage
             double age = (serverNowUtc - m.DateUtc).TotalSeconds;
             if (age > settings.MaxAgeSeconds && ExpiresWhenLate(cmd))
             {
-                host.SendText(m.ChatId, "⌛ Comando scaduto (inviato alle " + LocalTime(m.DateUtc) + "): rimandalo se serve ancora.");
-                host.Audit(m.FromId, "/" + cmd, "scaduto");
+                host.SendText(m.ChatId, L.T("⌛ Comando scaduto (inviato alle ", "⌛ Command expired (sent at ") + LocalTime(m.DateUtc) + L.T("): rimandalo se serve ancora.", "): send it again if you still need it."));
+                host.Audit(m.FromId, Cmd(cmd), L.T("scaduto", "expired"));
                 return;
             }
 
             Execute(m, cmd, args, serverNowUtc);
         }
 
-        public const string LockedShutdownNote =
-            "🔒 Il PC è bloccato: se lo è ancora alla scadenza, le app aperte verranno chiuse senza salvare.";
+        public static string LockedShutdownNote
+        {
+            get { return L.T("🔒 Il PC è bloccato: se lo è ancora alla scadenza, le app aperte verranno chiuse senza salvare.", "🔒 The PC is locked: if it still is when time runs out, open apps will be closed without saving."); }
+        }
 
         /// <summary>Comandi che non si eseguono se arrivano oltre il tempo massimo (quelli protetti dal codice).</summary>
         public static bool ExpiresWhenLate(string cmd)
@@ -1049,13 +1051,13 @@ namespace WinUsage
                 if (!secrets.CanAddPhone)
                 {
                     pairingCode = null;
-                    host.SendText(chatId, "Ci sono già " + RemoteSecrets.MaxPhones + " telefoni abbinati: rimuovine uno dal PC e riprova.");
-                    host.Audit(userId, "/abbina", "troppi telefoni");
+                    host.SendText(chatId, L.T("Ci sono già ", "There are already ") + RemoteSecrets.MaxPhones + L.T(" telefoni abbinati: rimuovine uno dal PC e riprova.", " paired phones: remove one from the PC and try again."));
+                    host.Audit(userId, L.T("/abbina", "/pair"), L.T("troppi telefoni", "too many phones"));
                     return;
                 }
                 pairingConfirmPending = true;
                 string name = string.IsNullOrEmpty(m.FromName) ? "?" : m.FromName;
-                host.SendText(chatId, "Codice corretto. Conferma l'abbinamento sul PC.");
+                host.SendText(chatId, L.T("Codice corretto. Conferma l'abbinamento sul PC.", "Correct code. Confirm the pairing on the PC."));
                 host.ConfirmPairing(userId, name, delegate(bool ok)
                 {
                     pairingConfirmPending = false;
@@ -1068,32 +1070,32 @@ namespace WinUsage
                         secrets.Phones.Add(phone);
                         codeStates.Remove(userId);
                         host.SaveSecrets();
-                        host.Audit(userId, "/abbina", "abbinato");
-                        host.SendText(chatId, "✅ Telefono abbinato a " + Environment.MachineName + ".\n\n" + HelpText());
+                        host.Audit(userId, L.T("/abbina", "/pair"), L.T("abbinato", "paired"));
+                        host.SendText(chatId, L.T("✅ Telefono abbinato a ", "✅ Phone paired with ") + Environment.MachineName + ".\n\n" + HelpText());
                         // gli altri telefoni lo sanno: un abbinamento che nessuno aspettava salta all'occhio
                         if (secrets.Phones.Count > 1)
-                            host.Broadcast("📱 Nuovo telefono abbinato a " + Environment.MachineName + ": " + phone.Label + ".", userId);
+                            host.Broadcast(L.T("📱 Nuovo telefono abbinato a ", "📱 New phone paired with ") + Environment.MachineName + ": " + phone.Label + ".", userId);
                     }
                     else
                     {
-                        host.Audit(userId, "/abbina", "rifiutato dal PC");
-                        host.SendText(chatId, "Abbinamento rifiutato dal PC.");
+                        host.Audit(userId, L.T("/abbina", "/pair"), L.T("rifiutato dal PC", "refused on the PC"));
+                        host.SendText(chatId, L.T("Abbinamento rifiutato dal PC.", "Pairing refused on the PC."));
                     }
                 });
                 return;
             }
 
-            host.Audit(m.FromId, "/abbina", "codice errato (" + pairingAttempts + "/" + PairingMaxAttempts + ")");
+            host.Audit(m.FromId, L.T("/abbina", "/pair"), L.T("codice errato (", "wrong code (") + pairingAttempts + "/" + PairingMaxAttempts + ")");
             if (pairingAttempts >= PairingMaxAttempts)
             {
                 pairingCode = null;
-                host.SendText(m.ChatId, "Codice errato. Troppi tentativi: abbinamento chiuso.");
-                host.SecurityAlert("Troppi tentativi di abbinamento con un codice errato (account id " + m.FromId +
-                                   "). L'abbinamento è stato chiuso.");
+                host.SendText(m.ChatId, L.T("Codice errato. Troppi tentativi: abbinamento chiuso.", "Wrong code. Too many attempts: pairing closed."));
+                host.SecurityAlert(L.T("Troppi tentativi di abbinamento con un codice errato (account id ", "Too many pairing attempts with a wrong code (account id ") + m.FromId +
+                                   L.T("). L'abbinamento è stato chiuso.", "). Pairing has been closed."));
             }
             else
             {
-                host.SendText(m.ChatId, "Codice errato.");
+                host.SendText(m.ChatId, L.T("Codice errato.", "Wrong code."));
             }
         }
 
@@ -1115,9 +1117,33 @@ namespace WinUsage
             string head = parts[0].Substring(1);
             int at = head.IndexOf('@');
             if (at >= 0) head = head.Substring(0, at);
-            cmd = head.ToLowerInvariant();
+            cmd = Canonical(head.ToLowerInvariant());
             args = new string[parts.Length - 1];
             Array.Copy(parts, 1, args, 0, args.Length);
+        }
+
+        // Comandi in tutte e due le lingue: dentro si usa sempre il nome italiano, il messaggio può usare l'uno o l'altro.
+        private static readonly string[][] CommandNames =
+        {
+            new[] { "aiuto", "help" }, new[] { "stato", "status" }, new[] { "screenshot", "screenshot" },
+            new[] { "app", "app" }, new[] { "chat", "chat" }, new[] { "blocca", "lock" }, new[] { "spegni", "shutdown" },
+            new[] { "annulla", "cancel" }, new[] { "sblocca", "unlock" }, new[] { "telefoni", "phones" },
+            new[] { "stop", "stop" }, new[] { "abbina", "pair" }
+        };
+
+        /// <summary>Nome interno (italiano) di un comando scritto in italiano o in inglese.</summary>
+        public static string Canonical(string name)
+        {
+            foreach (string[] n in CommandNames) if (n[1] == name) return n[0];
+            if (name == "poweroff" || name == "off") return "spegni";
+            return name;
+        }
+
+        /// <summary>Nome del comando da mostrare, con la barra, nella lingua scelta ("/blocca" o "/lock").</summary>
+        public static string Cmd(string canonical)
+        {
+            foreach (string[] n in CommandNames) if (n[0] == canonical) return "/" + (L.En ? n[1] : n[0]);
+            return "/" + canonical;
         }
 
         private static bool IsCode(string s)
@@ -1145,29 +1171,29 @@ namespace WinUsage
             CodeState st = State(m.FromId);
             if (phone == null || !phone.HasTotp)
             {
-                host.SendText(m.ChatId, "Questo comando richiede il codice dell'Authenticator, che per questo telefono non è ancora " +
-                                        "configurato sul PC (Controllo remoto > Codice).");
-                host.Audit(m.FromId, "/" + cmd, "codice non configurato");
+                host.SendText(m.ChatId, L.T("Questo comando richiede il codice dell'Authenticator, che per questo telefono non è ancora ", "This command needs the Authenticator code, which for this phone is not yet ") +
+                                        L.T("configurato sul PC (Controllo remoto > Codice).", "set up on the PC (Remote control > Code)."));
+                host.Audit(m.FromId, Cmd(cmd), L.T("codice non configurato", "code not set up"));
                 return false;
             }
 
             if (nowUtc < st.LockoutUntilUtc)
             {
-                host.SendText(m.ChatId, "⛔ Troppi codici errati: i comandi con codice sono bloccati fino alle " + LocalTime(st.LockoutUntilUtc) + ".");
-                host.Audit(m.FromId, "/" + cmd, "bloccato per codici errati");
+                host.SendText(m.ChatId, L.T("⛔ Troppi codici errati: i comandi con codice sono bloccati fino alle ", "⛔ Too many wrong codes: commands with a code are blocked until ") + LocalTime(st.LockoutUntilUtc) + ".");
+                host.Audit(m.FromId, Cmd(cmd), L.T("bloccato per codici errati", "blocked for wrong codes"));
                 return false;
             }
 
             if (code == null)
             {
                 if (nowUtc < st.SessionUntilUtc) return true;
-                host.SendText(m.ChatId, "Serve il codice dell'Authenticator: /" + cmd + " 123456\n" +
-                                        "Oppure /sblocca 123456 per non chiederlo per " + SessionMinutes + " minuti.");
-                host.Audit(m.FromId, "/" + cmd, "codice mancante");
+                host.SendText(m.ChatId, L.T("Serve il codice dell'Authenticator: ", "The Authenticator code is needed: ") + Cmd(cmd) + " 123456\n" +
+                                        L.T("Oppure /sblocca 123456 per non chiederlo per ", "Or /unlock 123456 so it is not asked for ") + SessionMinutes + L.T(" minuti.", " minutes."));
+                host.Audit(m.FromId, Cmd(cmd), L.T("codice mancante", "code missing"));
                 return false;
             }
 
-            return VerifyCode(m, "/" + cmd, code, nowUtc);
+            return VerifyCode(m, Cmd(cmd), code, nowUtc);
         }
 
         /// <summary>Verifica il codice con il segreto del telefono che scrive (ogni telefono ha il suo).</summary>
@@ -1190,17 +1216,17 @@ namespace WinUsage
                 st.Failures = 0;
                 st.LockoutUntilUtc = nowUtc.AddMinutes(LockoutMinutes);
                 st.SessionUntilUtc = DateTime.MinValue;
-                host.SendText(m.ChatId, "⛔ Codice errato per " + MaxCodeFailures + " volte: comandi con codice bloccati per " +
-                                        LockoutMinutes + " minuti.");
-                host.SecurityAlert("Codice dell'Authenticator sbagliato " + MaxCodeFailures + " volte dal telefono di " +
-                                   secrets.NameOf(m.FromId) + ". Per quel telefono i comandi con codice sono bloccati per " +
-                                   LockoutMinutes + " minuti.");
-                host.Audit(m.FromId, what, "codice errato, blocco di " + LockoutMinutes + " minuti");
+                host.SendText(m.ChatId, L.T("⛔ Codice errato per ", "⛔ Wrong code ") + MaxCodeFailures + L.T(" volte: comandi con codice bloccati per ", " times: commands with a code blocked for ") +
+                                        LockoutMinutes + L.T(" minuti.", " minutes."));
+                host.SecurityAlert(L.T("Codice dell'Authenticator sbagliato ", "Wrong Authenticator code ") + MaxCodeFailures + L.T(" volte dal telefono di ", " times from the phone of ") +
+                                   secrets.NameOf(m.FromId) + L.T(". Per quel telefono i comandi con codice sono bloccati per ", ". For that phone, commands with a code are blocked for ") +
+                                   LockoutMinutes + L.T(" minuti.", " minutes."));
+                host.Audit(m.FromId, what, L.T("codice errato, blocco di ", "wrong code, blocked for ") + LockoutMinutes + L.T(" minuti", " minutes"));
             }
             else
             {
-                host.SendText(m.ChatId, "Codice errato o già usato. Aspetta il prossimo codice e riprova.");
-                host.Audit(m.FromId, what, "codice errato");
+                host.SendText(m.ChatId, L.T("Codice errato o già usato. Aspetta il prossimo codice e riprova.", "Wrong or already used code. Wait for the next code and try again."));
+                host.Audit(m.FromId, what, L.T("codice errato", "wrong code"));
             }
             return false;
         }
@@ -1215,12 +1241,12 @@ namespace WinUsage
                 case "aiuto":
                 case "help":
                     host.SendText(chat, HelpText());
-                    host.Audit(m.FromId, "/" + cmd, "ok");
+                    host.Audit(m.FromId, Cmd(cmd), "ok");
                     break;
 
                 case "stato":
                     host.SendText(chat, host.StatusText());
-                    host.Audit(m.FromId, "/stato", "ok");
+                    host.Audit(m.FromId, L.T("/stato", "/status"), "ok");
                     break;
 
                 case "sblocca":
@@ -1230,27 +1256,27 @@ namespace WinUsage
                     CodeState st = State(m.FromId);
                     if (phone == null || !phone.HasTotp)
                     {
-                        host.SendText(chat, "Il codice dell'Authenticator per questo telefono non è configurato sul PC.");
-                        host.Audit(m.FromId, "/sblocca", "codice non configurato");
+                        host.SendText(chat, L.T("Il codice dell'Authenticator per questo telefono non è configurato sul PC.", "The Authenticator code for this phone is not set up on the PC."));
+                        host.Audit(m.FromId, L.T("/sblocca", "/unlock"), L.T("codice non configurato", "code not set up"));
                         break;
                     }
                     if (nowUtc < st.LockoutUntilUtc)
                     {
-                        host.SendText(chat, "⛔ Comandi con codice bloccati fino alle " + LocalTime(st.LockoutUntilUtc) + ".");
-                        host.Audit(m.FromId, "/sblocca", "bloccato per codici errati");
+                        host.SendText(chat, L.T("⛔ Comandi con codice bloccati fino alle ", "⛔ Commands with a code blocked until ") + LocalTime(st.LockoutUntilUtc) + ".");
+                        host.Audit(m.FromId, L.T("/sblocca", "/unlock"), L.T("bloccato per codici errati", "blocked for wrong codes"));
                         break;
                     }
                     if (!IsCode(code))
                     {
-                        host.SendText(chat, "Uso: /sblocca 123456");
+                        host.SendText(chat, L.T("Uso: /sblocca 123456", "Usage: /unlock 123456"));
                         break;
                     }
-                    if (VerifyCode(m, "/sblocca", code, nowUtc))
+                    if (VerifyCode(m, L.T("/sblocca", "/unlock"), code, nowUtc))
                     {
                         st.SessionUntilUtc = nowUtc.AddMinutes(SessionMinutes);
-                        host.SendText(chat, "🔓 Per " + SessionMinutes + " minuti (fino alle " + LocalTime(st.SessionUntilUtc) +
-                                            ") /blocca e /spegni non chiedono il codice.");
-                        host.Audit(m.FromId, "/sblocca", "sessione di " + SessionMinutes + " minuti");
+                        host.SendText(chat, L.T("🔓 Per ", "🔓 For ") + SessionMinutes + L.T(" minuti (fino alle ", " minutes (until ") + LocalTime(st.SessionUntilUtc) +
+                                            L.T(") /blocca e /spegni non chiedono il codice.", ") /lock and /shutdown do not ask for the code."));
+                        host.Audit(m.FromId, L.T("/sblocca", "/unlock"), L.T("sessione di ", "session of ") + SessionMinutes + L.T(" minuti", " minutes"));
                     }
                     break;
                 }
@@ -1260,8 +1286,8 @@ namespace WinUsage
                     if (!CheckCode(m, "screenshot", args, nowUtc)) break;
                     if ((nowUtc - lastScreenshotUtc).TotalSeconds < ScreenshotIntervalSeconds)
                     {
-                        host.SendText(chat, "Uno screenshot ogni " + ScreenshotIntervalSeconds + " secondi: riprova tra poco.");
-                        host.Audit(m.FromId, "/screenshot", "troppo presto");
+                        host.SendText(chat, L.T("Uno screenshot ogni ", "One screenshot every ") + ScreenshotIntervalSeconds + L.T(" secondi: riprova tra poco.", " seconds: try again shortly."));
+                        host.Audit(m.FromId, "/screenshot", L.T("troppo presto", "too soon"));
                         break;
                     }
                     lastScreenshotUtc = nowUtc;
@@ -1283,7 +1309,7 @@ namespace WinUsage
                     {
                         host.SendScreenshot(chat, shot);
                         host.NotifyLocal("screenshot");
-                        host.Audit(m.FromId, "/screenshot" + (monitor > 0 ? " " + monitor : "") + (hd ? " hd" : ""), "inviato");
+                        host.Audit(m.FromId, "/screenshot" + (monitor > 0 ? " " + monitor : "") + (hd ? " hd" : ""), L.T("inviato", "sent"));
                     }
                     break;
                 }
@@ -1293,7 +1319,7 @@ namespace WinUsage
                     if (!CheckCode(m, "app", args, nowUtc)) break;
                     if ((nowUtc - lastAppUtc).TotalSeconds < ScreenshotIntervalSeconds)
                     {
-                        host.SendText(chat, "Riprova tra qualche secondo.");
+                        host.SendText(chat, L.T("Riprova tra qualche secondo.", "Try again in a few seconds."));
                         break;
                     }
                     lastAppUtc = nowUtc;
@@ -1305,7 +1331,7 @@ namespace WinUsage
 
                 case "chat":
                     host.OpenChat(true, m.FromId);
-                    host.SendText(chat, "💬 Richiesta di chat mostrata sul PC: scrivi qui i messaggi (senza /). Ti avviso se la aprono o la rifiutano.");
+                    host.SendText(chat, L.T("💬 Richiesta di chat mostrata sul PC: scrivi qui i messaggi (senza /). Ti avviso se la aprono o la rifiutano.", "💬 Chat request shown on the PC: write your messages here (without /). I will tell you if it is opened or refused."));
                     host.Audit(m.FromId, "/chat", "ok");
                     break;
 
@@ -1313,13 +1339,13 @@ namespace WinUsage
                 {
                     if (!CheckCode(m, "blocca", args, nowUtc)) break;
                     LockResult r = host.Lock();
-                    string reply = r == LockResult.Locked ? "🔒 PC bloccato alle " + LocalTime(DateTime.UtcNow) + "."
-                                 : r == LockResult.AlreadyLocked ? "Il PC era già bloccato."
-                                 : "Non è stato possibile bloccare il PC.";
+                    string reply = r == LockResult.Locked ? L.T("🔒 PC bloccato alle ", "🔒 PC locked at ") + LocalTime(DateTime.UtcNow) + "."
+                                 : r == LockResult.AlreadyLocked ? L.T("Il PC era già bloccato.", "The PC was already locked.")
+                                 : L.T("Non è stato possibile bloccare il PC.", "The PC could not be locked.");
                     host.SendText(chat, reply);
                     if (r == LockResult.Locked)
-                        host.Broadcast("🔒 " + secrets.NameOf(m.FromId) + " ha bloccato il PC alle " + LocalTime(DateTime.UtcNow) + ".", m.FromId);
-                    host.Audit(m.FromId, "/blocca", r.ToString());
+                        host.Broadcast("🔒 " + secrets.NameOf(m.FromId) + L.T(" ha bloccato il PC alle ", " locked the PC at ") + LocalTime(DateTime.UtcNow) + ".", m.FromId);
+                    host.Audit(m.FromId, L.T("/blocca", "/lock"), r.ToString());
                     break;
                 }
 
@@ -1333,79 +1359,87 @@ namespace WinUsage
                         if (args.Count > 1 || !int.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out n) ||
                             n < RemoteSettings.MinShutdownMinutes || n > RemoteSettings.MaxShutdownMinutes)
                         {
-                            host.SendText(chat, "Uso: /spegni 123456 [minuti], minuti da " + RemoteSettings.MinShutdownMinutes +
-                                                " a " + RemoteSettings.MaxShutdownMinutes + " (predefinito " + settings.ShutdownDefaultMinutes + ").");
-                            host.Audit(m.FromId, "/spegni", "argomenti non validi");
+                            host.SendText(chat, L.T("Uso: /spegni 123456 [minuti], minuti da ", "Usage: /shutdown 123456 [minutes], minutes from ") + RemoteSettings.MinShutdownMinutes +
+                                                L.T(" a ", " to ") + RemoteSettings.MaxShutdownMinutes + L.T(" (predefinito ", " (default ") + settings.ShutdownDefaultMinutes + ").");
+                            host.Audit(m.FromId, L.T("/spegni", "/shutdown"), L.T("argomenti non validi", "invalid arguments"));
                             break;
                         }
                         minutes = n;
                     }
                     bool replacing = host.ShutdownActive;
                     DateTime due = host.StartShutdown(minutes);
-                    host.SendText(chat, "⏻ Spegnimento alle " + due.ToString("HH:mm", CultureInfo.InvariantCulture) +
-                                        (replacing ? " (sostituisce il precedente)" : "") + ". /annulla per fermarlo." +
+                    host.SendText(chat, L.T("⏻ Spegnimento alle ", "⏻ Shutdown at ") + due.ToString("HH:mm", CultureInfo.InvariantCulture) +
+                                        (replacing ? L.T(" (sostituisce il precedente)", " (replaces the previous one)") : "") + L.T(". /annulla per fermarlo.", ". /cancel to stop it.") +
                                         (host.PcLocked ? "\n" + LockedShutdownNote : ""));
-                    host.Broadcast("⏻ " + secrets.NameOf(m.FromId) + " ha avviato lo spegnimento: alle " +
-                                   due.ToString("HH:mm", CultureInfo.InvariantCulture) + ". /annulla per fermarlo.", m.FromId);
-                    host.Audit(m.FromId, "/spegni " + minutes, "conto alla rovescia avviato");
+                    host.Broadcast("⏻ " + secrets.NameOf(m.FromId) + L.T(" ha avviato lo spegnimento: alle ", " started the shutdown: at ") +
+                                   due.ToString("HH:mm", CultureInfo.InvariantCulture) + L.T(". /annulla per fermarlo.", ". /cancel to stop it."), m.FromId);
+                    host.Audit(m.FromId, L.T("/spegni ", "/shutdown ") + minutes, L.T("conto alla rovescia avviato", "countdown started"));
                     break;
                 }
 
                 case "annulla":
                 {
                     bool was = host.CancelShutdown(true);
-                    host.SendText(chat, was ? "Spegnimento annullato." : "Nessuno spegnimento in corso.");
-                    if (was) host.Broadcast("Spegnimento annullato da " + secrets.NameOf(m.FromId) + ".", m.FromId);
-                    host.Audit(m.FromId, "/annulla", was ? "annullato" : "niente da annullare");
+                    host.SendText(chat, was ? L.T("Spegnimento annullato.", "Shutdown cancelled.") : L.T("Nessuno spegnimento in corso.", "No shutdown in progress."));
+                    if (was) host.Broadcast(L.T("Spegnimento annullato da ", "Shutdown cancelled by ") + secrets.NameOf(m.FromId) + ".", m.FromId);
+                    host.Audit(m.FromId, L.T("/annulla", "/cancel"), was ? L.T("annullato", "cancelled") : L.T("niente da annullare", "nothing to cancel"));
                     break;
                 }
 
                 case "stop":
-                    host.Audit(m.FromId, "/stop", "controllo remoto disattivato");
-                    host.SendText(chat, "Controllo remoto disattivato. Si riattiva solo dal PC.");
-                    host.Broadcast("Controllo remoto disattivato da " + secrets.NameOf(m.FromId) + ". Si riattiva solo dal PC.", m.FromId);
+                    host.Audit(m.FromId, "/stop", L.T("controllo remoto disattivato", "remote control turned off"));
+                    host.SendText(chat, L.T("Controllo remoto disattivato. Si riattiva solo dal PC.", "Remote control turned off. It can only be turned back on from the PC."));
+                    host.Broadcast(L.T("Controllo remoto disattivato da ", "Remote control turned off by ") + secrets.NameOf(m.FromId) + L.T(". Si riattiva solo dal PC.", ". It can only be turned back on from the PC."), m.FromId);
                     host.DisableRemote();
                     break;
 
                 case "abbina":
-                    host.SendText(chat, "Questo telefono è già abbinato.");
+                    host.SendText(chat, L.T("Questo telefono è già abbinato.", "This phone is already paired."));
                     break;
 
                 case "telefoni":
                 {
-                    StringBuilder sb = new StringBuilder("📱 Telefoni abbinati a " + Environment.MachineName + ":");
+                    StringBuilder sb = new StringBuilder(L.T("📱 Telefoni abbinati a ", "📱 Phones paired with ") + Environment.MachineName + ":");
                     foreach (PairedPhone p in secrets.Phones)
-                        sb.Append("\n• ").Append(p.Label).Append(p.Id == m.FromId ? " (questo)" : "")
-                          .Append(p.HasTotp ? "" : " – codice non configurato");
+                        sb.Append("\n• ").Append(p.Label).Append(p.Id == m.FromId ? L.T(" (questo)", " (this one)") : "")
+                          .Append(p.HasTotp ? "" : L.T(" – codice non configurato", " – code not set up"));
                     host.SendText(chat, sb.ToString());
-                    host.Audit(m.FromId, "/telefoni", "ok");
+                    host.Audit(m.FromId, L.T("/telefoni", "/phones"), "ok");
                     break;
                 }
 
                 default:
-                    host.SendText(chat, "Comando sconosciuto. /aiuto per l'elenco.");
-                    host.Audit(m.FromId, "/" + cmd, "sconosciuto");
+                    host.SendText(chat, L.T("Comando sconosciuto. /aiuto per l'elenco.", "Unknown command. /help for the list."));
+                    host.Audit(m.FromId, Cmd(cmd), L.T("sconosciuto", "unknown"));
                     break;
             }
         }
 
         public string HelpText()
         {
+            // nomi dei comandi nella lingua scelta; funzionano comunque anche quelli dell'altra lingua
+            string code = L.T(" CODICE", " CODE"), codeTag = L.T(" (codice)", " (code)");
             StringBuilder sb = new StringBuilder();
-            sb.Append("WinUsage su ").Append(Environment.MachineName).Append("\n\n");
-            sb.Append("/stato – tempi di utilizzo\n");
-            sb.Append("/app – applicazione in uso").Append(secrets.CodeApp ? " (codice)" : "").Append('\n');
-            sb.Append("/screenshot [n] [hd] – cattura dello schermo").Append(secrets.CodeScreenshot ? " (codice)" : "").Append('\n');
-            sb.Append("/chat – apre la chat sul PC").Append(secrets.Phones.Count > 1 ? " (la leggono tutti i telefoni abbinati)" : "").Append('\n');
-            sb.Append("/blocca").Append(secrets.CodeLock ? " CODICE" : "").Append(" – blocca il PC\n");
-            sb.Append("/spegni").Append(secrets.CodeShutdown ? " CODICE" : "").Append(" [minuti] – spegne dopo un conto alla rovescia (")
+            sb.Append(L.T("WinUsage su ", "WinUsage on ")).Append(Environment.MachineName).Append("\n\n");
+            sb.Append(Cmd("stato")).Append(L.T(" – tempi di utilizzo", " – usage times")).Append('\n');
+            sb.Append(Cmd("app")).Append(L.T(" – applicazione in uso", " – app in use")).Append(secrets.CodeApp ? codeTag : "").Append('\n');
+            sb.Append(Cmd("screenshot")).Append(L.T(" [n] [hd] – cattura dello schermo", " [n] [hd] – screen capture"))
+              .Append(secrets.CodeScreenshot ? codeTag : "").Append('\n');
+            sb.Append(Cmd("chat")).Append(L.T(" – apre la chat sul PC", " – opens the chat on the PC"))
+              .Append(secrets.Phones.Count > 1 ? L.T(" (la leggono tutti i telefoni abbinati)", " (all paired phones read it)") : "").Append('\n');
+            sb.Append(Cmd("blocca")).Append(secrets.CodeLock ? code : "").Append(L.T(" – blocca il PC", " – locks the PC")).Append('\n');
+            sb.Append(Cmd("spegni")).Append(secrets.CodeShutdown ? code : "")
+              .Append(L.T(" [minuti] – spegne dopo un conto alla rovescia (", " [minutes] – shuts down after a countdown ("))
               .Append(settings.ShutdownDefaultMinutes).Append(" min)\n");
-            sb.Append("/annulla – ferma lo spegnimento\n");
-            sb.Append("/sblocca CODICE – niente codice per ").Append(SessionMinutes).Append(" minuti\n");
-            sb.Append("/telefoni – telefoni abbinati\n");
-            sb.Append("/stop – disattiva il controllo remoto per tutti (si riattiva dal PC)\n\n");
-            sb.Append("Il testo senza / va nella chat del PC.\n");
-            sb.Append("Il PC non ti chiederà mai codici o password in chat: se succede, non è lui.");
+            sb.Append(Cmd("annulla")).Append(L.T(" – ferma lo spegnimento", " – stops the shutdown")).Append('\n');
+            sb.Append(Cmd("sblocca")).Append(code).Append(L.T(" – niente codice per ", " – no code needed for ")).Append(SessionMinutes)
+              .Append(L.T(" minuti", " minutes")).Append('\n');
+            sb.Append(Cmd("telefoni")).Append(L.T(" – telefoni abbinati", " – paired phones")).Append('\n');
+            sb.Append(Cmd("stop")).Append(L.T(" – disattiva il controllo remoto per tutti (si riattiva dal PC)",
+                                              " – turns remote control off for everyone (turn it back on from the PC)")).Append("\n\n");
+            sb.Append(L.T("Il testo senza / va nella chat del PC.", "Text without / goes to the PC chat.")).Append('\n');
+            sb.Append(L.T("Il PC non ti chiederà mai codici o password in chat: se succede, non è lui.",
+                          "The PC will never ask you for codes or passwords in chat: if that happens, it is not the PC."));
             return sb.ToString();
         }
 
@@ -1413,30 +1447,32 @@ namespace WinUsage
         public static string FormatForeground(ForegroundInfo fi, DateTime nowUtc)
         {
             if (fi.State == SessionState.Locked)
-                return "🔒 PC bloccato" + (fi.LockedSinceUtc > DateTime.MinValue ? " dalle " + LocalTime(fi.LockedSinceUtc) : "") + ".";
+                return L.T("🔒 PC bloccato", "🔒 PC locked") +
+                       (fi.LockedSinceUtc > DateTime.MinValue ? L.T(" dalle ", " since ") + LocalTime(fi.LockedSinceUtc) : "") + ".";
             if (fi.State == SessionState.Disconnected)
-                return "👥 Un altro utente sta usando il PC (sessione disconnessa).";
+                return L.T("👥 Un altro utente sta usando il PC (sessione disconnessa).", "👥 Another user is using the PC (session disconnected).");
 
             StringBuilder sb = new StringBuilder();
             string name = string.IsNullOrEmpty(fi.AppName) ? fi.ProcessName : fi.AppName;
-            if (string.IsNullOrEmpty(name)) sb.Append("🖥️ Nessuna applicazione in primo piano");
+            if (string.IsNullOrEmpty(name)) sb.Append(L.T("🖥️ Nessuna applicazione in primo piano", "🖥️ No app in the foreground"));
             else
             {
-                sb.Append("🖥️ In uso: ").Append(name);
+                sb.Append(L.T("🖥️ In uso: ", "🖥️ In use: ")).Append(name);
                 if (!string.IsNullOrEmpty(fi.ProcessName) && !string.Equals(name, fi.ProcessName, StringComparison.OrdinalIgnoreCase))
                     sb.Append(" (").Append(fi.ProcessName).Append(".exe)");
-                if (fi.SinceUtc > DateTime.MinValue) sb.Append(" da ").Append(Fmt.Long((nowUtc - fi.SinceUtc).TotalSeconds));
+                if (fi.SinceUtc > DateTime.MinValue) sb.Append(L.T(" da ", " for ")).Append(Fmt.Long((nowUtc - fi.SinceUtc).TotalSeconds));
             }
-            sb.Append("\n⌨️ Ultimo input: ").Append(Ago(fi.IdleSeconds));
-            sb.Append("\n🎮 Gioco Steam in corso: ").Append(fi.SteamGame ? "sì" : "no");
-            sb.Append("\n🖵 Schermo intero: ").Append(fi.Fullscreen ? "sì" : "no");
+            string yes = L.T("sì", "yes"), no = "no";
+            sb.Append(L.T("\n⌨️ Ultimo input: ", "\n⌨️ Last input: ")).Append(Ago(fi.IdleSeconds));
+            sb.Append(L.T("\n🎮 Gioco Steam in corso: ", "\n🎮 Steam game running: ")).Append(fi.SteamGame ? yes : no);
+            sb.Append(L.T("\n🖵 Schermo intero: ", "\n🖵 Full screen: ")).Append(fi.Fullscreen ? yes : no);
             return sb.ToString();
         }
 
         public static string Ago(double seconds)
         {
-            if (seconds < 60) return Math.Max(0, (int)seconds) + " s fa";
-            return Fmt.Long(seconds) + " fa";
+            if (seconds < 60) return Math.Max(0, (int)seconds) + L.T(" s fa", " s ago");
+            return Fmt.Long(seconds) + L.T(" fa", " ago");
         }
 
         public static string LocalTime(DateTime utc)
@@ -1444,14 +1480,14 @@ namespace WinUsage
             return utc.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture);
         }
 
-        /// <summary>"alle 23:40", "ieri alle 23:40", "il 12/11 alle 23:40" rispetto a <paramref name="nowUtc"/>.</summary>
+        /// <summary>"alle 23:40", "ieri alle 23:40", "il 12/11 alle 23:40" rispetto a <paramref name="nowUtc"/> (in inglese "at 23:40"...).</summary>
         public static string When(DateTime utc, DateTime nowUtc)
         {
             DateTime local = utc.ToLocalTime(), now = nowUtc.ToLocalTime();
             string hm = local.ToString("HH:mm", CultureInfo.InvariantCulture);
-            if (local.Date == now.Date) return "alle " + hm;
-            if (local.Date == now.Date.AddDays(-1)) return "ieri alle " + hm;
-            return "il " + local.ToString("dd/MM", CultureInfo.InvariantCulture) + " alle " + hm;
+            if (local.Date == now.Date) return L.T("alle ", "at ") + hm;
+            if (local.Date == now.Date.AddDays(-1)) return L.T("ieri alle ", "yesterday at ") + hm;
+            return L.T("il ", "on ") + local.ToString("dd/MM", CultureInfo.InvariantCulture) + L.T(" alle ", " at ") + hm;
         }
     }
 
@@ -1463,40 +1499,43 @@ namespace WinUsage
         public static string On(DateTime utc, bool autostart, DateTime nowUtc)
         {
             return autostart
-                ? "🟢 PC acceso — " + PcName + ", accesso " + RemoteController.When(utc, nowUtc)
-                : "🟢 WinUsage avviato — " + PcName + " " + RemoteController.When(utc, nowUtc);
+                ? L.T("🟢 PC acceso — ", "🟢 PC on — ") + PcName + L.T(", accesso ", ", signed in ") + RemoteController.When(utc, nowUtc)
+                : L.T("🟢 WinUsage avviato — ", "🟢 WinUsage started — ") + PcName + " " + RemoteController.When(utc, nowUtc);
         }
 
         public static string Off(DateTime utc, bool logoff, double sessionSeconds, long[] today, DateTime nowUtc)
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append(logoff ? "🔴 Disconnessione — " : "🔴 PC spento o riavviato — ").Append(PcName).Append(' ')
-              .Append(RemoteController.When(utc, nowUtc));
-            sb.Append(" · sessione ").Append(Fmt.Compact(sessionSeconds));
-            sb.Append(" · oggi: ");
+            sb.Append(logoff ? L.T("🔴 Disconnessione — ", "🔴 Signed out — ") : L.T("🔴 PC spento o riavviato — ", "🔴 PC shut down or restarted — "))
+              .Append(PcName).Append(' ').Append(RemoteController.When(utc, nowUtc));
+            sb.Append(L.T(" · sessione ", " · session ")).Append(Fmt.Compact(sessionSeconds));
+            sb.Append(L.T(" · oggi: ", " · today: "));
+            string[] labels = TimerIds.Labels;
             for (int i = 0; i < TimerIds.Count; i++)
             {
                 if (i > 0) sb.Append(", ");
-                sb.Append(TimerIds.Labels[i]).Append(' ').Append(Fmt.Compact(today[i]));
+                sb.Append(labels[i]).Append(' ').Append(Fmt.Compact(today[i]));
             }
             return sb.ToString();
         }
 
         public static string AppClosed(DateTime utc, DateTime nowUtc)
         {
-            return "⚪ WinUsage chiuso — " + PcName + " " + RemoteController.When(utc, nowUtc) +
-                   " (uscita dall'app o aggiornamento): il PC resta acceso senza controllo remoto.";
+            return L.T("⚪ WinUsage chiuso — ", "⚪ WinUsage closed — ") + PcName + " " + RemoteController.When(utc, nowUtc) +
+                   L.T(" (uscita dall'app o aggiornamento): il PC resta acceso senza controllo remoto.",
+                       " (app exited or updated): the PC stays on without remote control.");
         }
 
         public static string Crash(DateTime lastSeenUtc, DateTime nowUtc)
         {
-            return "⚠️ Spegnimento improvviso — " + PcName + ": ultimo segnale " + RemoteController.When(lastSeenUtc, nowUtc) +
-                   " (±30 s). Mancanza di corrente, blocco o spegnimento forzato.";
+            return L.T("⚠️ Spegnimento improvviso — ", "⚠️ Sudden shutdown — ") + PcName + L.T(": ultimo segnale ", ": last signal ") +
+                   RemoteController.When(lastSeenUtc, nowUtc) +
+                   L.T(" (±30 s). Mancanza di corrente, blocco o spegnimento forzato.", " (±30 s). Power cut, freeze or forced shutdown.");
         }
 
         public static string Late(string text, DateTime createdUtc, DateTime nowUtc)
         {
-            return (nowUtc - createdUtc).TotalMinutes >= 2 ? text + " (notificato in ritardo)" : text;
+            return (nowUtc - createdUtc).TotalMinutes >= 2 ? text + L.T(" (notificato in ritardo)", " (sent late)") : text;
         }
     }
 }

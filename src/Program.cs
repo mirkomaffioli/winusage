@@ -9,6 +9,9 @@ namespace WinUsage
     {
         private const string QuitEventName = @"Local\WinUsage.Quit";
 
+        /// <summary>Uscita per ripartire (cambio di lingua): si riavvia dopo aver lasciato il mutex dell'istanza unica.</summary>
+        public static bool RestartRequested;
+
         [STAThread]
         private static void Main(string[] args)
         {
@@ -55,6 +58,12 @@ namespace WinUsage
                     Application.Run(context);
                     wait.Unregister(null);
                 }
+            }
+
+            if (RestartRequested)
+            {
+                try { System.Diagnostics.Process.Start(Application.ExecutablePath); }
+                catch (Exception ex) { Log.Write(ex); }
             }
         }
     }

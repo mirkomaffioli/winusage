@@ -204,12 +204,12 @@ namespace WinUsage
         public static ScreenshotResult Capture(int monitor, bool hd, HashSet<string> exclusions)
         {
             ScreenshotResult r = new ScreenshotResult();
-            if (Probe.UserAway()) { r.Error = "🔒 PC bloccato: lo screenshot non è possibile."; return r; }
+            if (Probe.UserAway()) { r.Error = L.T("🔒 PC bloccato: lo screenshot non è possibile.", "🔒 PC locked: a screenshot is not possible."); return r; }
 
             string fg = ForegroundProcessName();
             if (fg.Length > 0 && exclusions.Contains(fg))
             {
-                r.Error = "🙈 Screenshot non consentito ora: in primo piano c'è un'app esclusa.";
+                r.Error = L.T("🙈 Screenshot non consentito ora: in primo piano c'è un'app esclusa.", "🙈 Screenshot not allowed now: an excluded app is in the foreground.");
                 return r;
             }
 
@@ -237,7 +237,7 @@ namespace WinUsage
                 else if (monitor <= monitors.Count) area = monitors[monitor - 1];
                 else
                 {
-                    r.Error = "Monitor " + monitor + " inesistente: ce ne sono " + monitors.Count + ".";
+                    r.Error = "Monitor " + monitor + L.T(" inesistente: ce ne sono ", " does not exist: there are ") + monitors.Count + ".";
                     return r;
                 }
                 CaptureArea(area, hd, r);
@@ -281,7 +281,7 @@ namespace WinUsage
                     {
                         r.Png = true;
                         r.Data = Encode(bmp, ImageFormat.Png, 0);
-                        if (r.Data.Length > 45 * 1024 * 1024) r.Error = "Screenshot troppo grande per Telegram: prova senza hd.";
+                        if (r.Data.Length > 45 * 1024 * 1024) r.Error = L.T("Screenshot troppo grande per Telegram: prova senza hd.", "Screenshot too big for Telegram: try without hd.");
                         return;
                     }
 
@@ -305,7 +305,7 @@ namespace WinUsage
             catch (Exception ex)
             {
                 Log.Write(ex);
-                r.Error = "Screenshot non riuscito.";
+                r.Error = L.T("Screenshot non riuscito.", "Screenshot failed.");
             }
         }
 

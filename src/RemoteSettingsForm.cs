@@ -73,7 +73,7 @@ namespace WinUsage
             RemoteSecrets s = service.SecretsCopy;
             SyncDrafts(s);
 
-            Text = "WinUsage - Controllo remoto (Telegram)";
+            Text = L.T("WinUsage - Controllo remoto (Telegram)", "WinUsage - Remote control (Telegram)");
             if (icon != null) Icon = icon;
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Font;
@@ -97,11 +97,11 @@ namespace WinUsage
             buttons.AutoSize = true;
             buttons.Padding = new Padding(8);
             Button close = new Button();
-            close.Text = "Chiudi";
+            close.Text = L.T("Chiudi", "Close");
             close.AutoSize = true;
             close.Click += delegate { Close(); };
             Button save = new Button();
-            save.Text = "Salva";
+            save.Text = L.T("Salva", "Save");
             save.AutoSize = true;
             save.Click += delegate { if (SaveAll()) Close(); };
             buttons.Controls.Add(close);
@@ -193,7 +193,7 @@ namespace WinUsage
 
         private TabPage BuildConnectionTab(RemoteSecrets s)
         {
-            TabPage tab = new TabPage("Collegamento");
+            TabPage tab = new TabPage(L.T("Collegamento", "Connection"));
             FlowLayoutPanel p = Page(tab);
             int w = 560;
 
@@ -201,26 +201,26 @@ namespace WinUsage
             lblStatus.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 11f, FontStyle.Bold);
             lblStatus.Margin = new Padding(3, 0, 3, 8);
             p.Controls.Add(lblStatus);
-            p.Controls.Add(Check(chkEnabled, "Controllo remoto attivo", working.Enabled));
+            p.Controls.Add(Check(chkEnabled, L.T("Controllo remoto attivo", "Remote control on"), working.Enabled));
 
-            p.Controls.Add(Title("1. Bot Telegram"));
-            p.Controls.Add(Note("In Telegram apri @BotFather, invia /newbot e scegli un nome qualsiasi (meglio uno che non " +
-                                "faccia capire di chi è). Copia qui il token. Consigliato: /setjoingroups → Disable. " +
-                                "Usa un bot diverso per ogni PC e per ogni utente.", w));
+            p.Controls.Add(Title(L.T("1. Bot Telegram", "1. Telegram bot")));
+            p.Controls.Add(Note(L.T("In Telegram apri @BotFather, invia /newbot e scegli un nome qualsiasi (meglio uno che non ", "In Telegram open @BotFather, send /newbot and pick any name (preferably one that does not ") +
+                                L.T("faccia capire di chi è). Copia qui il token. Consigliato: /setjoingroups → Disable. ", "reveal whose it is). Copy the token here. Recommended: /setjoingroups → Disable. ") +
+                                L.T("Usa un bot diverso per ogni PC e per ogni utente.", "Use a different bot for each PC and each user."), w));
             txtToken.Width = 360;
             txtToken.UseSystemPasswordChar = true;
             txtToken.Text = s.Token;
             CheckBox show = new CheckBox();
-            show.Text = "Mostra";
+            show.Text = L.T("Mostra", "Show");
             show.AutoSize = true;
             show.Margin = new Padding(6, 5, 3, 0);
             show.CheckedChanged += delegate { txtToken.UseSystemPasswordChar = !show.Checked; };
             Button verify = new Button();
-            verify.Text = "Verifica";
+            verify.Text = L.T("Verifica", "Check");
             verify.AutoSize = true;
             verify.Click += delegate
             {
-                lblToken.Text = "Verifica in corso...";
+                lblToken.Text = L.T("Verifica in corso...", "Checking...");
                 lblToken.ForeColor = SystemColors.GrayText;
                 service.TestToken(txtToken.Text.Trim(), delegate(string user, string err)
                 {
@@ -235,26 +235,26 @@ namespace WinUsage
             lblToken.Margin = new Padding(3, 2, 3, 6);
             p.Controls.Add(lblToken);
 
-            p.Controls.Add(Title("2. Telefoni abbinati (fino a " + RemoteSecrets.MaxPhones + ")"));
-            p.Controls.Add(Note("Premi Aggiungi telefono (salva e attiva il controllo remoto), poi dal telefono da aggiungere scrivi " +
-                                "al bot entro 5 minuti /abbina seguito dal codice. Il PC chiede conferma prima di accettare, e " +
-                                "gli altri telefoni ricevono un avviso. Tutti i telefoni possono usare tutti i comandi; ognuno " +
-                                "ha il suo codice Authenticator (scheda Codice). Avvisi e chat arrivano a tutti.", w));
+            p.Controls.Add(Title(L.T("2. Telefoni abbinati (fino a ", "2. Paired phones (up to ") + RemoteSecrets.MaxPhones + ")"));
+            p.Controls.Add(Note(L.T("Premi Aggiungi telefono (salva e attiva il controllo remoto), poi dal telefono da aggiungere scrivi ", "Press Add phone (it saves and turns on remote control), then from the phone to add send ") +
+                                L.T("al bot entro 5 minuti /abbina seguito dal codice. Il PC chiede conferma prima di accettare, e ", "the bot /pair followed by the code within 5 minutes. The PC asks for confirmation before accepting, and ") +
+                                L.T("gli altri telefoni ricevono un avviso. Tutti i telefoni possono usare tutti i comandi; ognuno ", "the other phones get a notice. All phones can use all commands; each one ") +
+                                L.T("ha il suo codice Authenticator (scheda Codice). Avvisi e chat arrivano a tutti.", "has its own Authenticator code (Code tab). Notices and chat reach everyone."), w));
             phonesView.View = View.Details;
             phonesView.FullRowSelect = true;
             phonesView.HideSelection = false;
             phonesView.MultiSelect = false;
             phonesView.HeaderStyle = ColumnHeaderStyle.Nonclickable;
-            phonesView.Columns.Add("Telefono (nome Telegram)", 220);
+            phonesView.Columns.Add(L.T("Telefono (nome Telegram)", "Phone (Telegram name)"), 220);
             phonesView.Columns.Add("Account", 110);
-            phonesView.Columns.Add("Codice", 150);
+            phonesView.Columns.Add(L.T("Codice", "Code"), 150);
             phonesView.Size = new Size(500, 118);
             phonesView.SelectedIndexChanged += delegate { btnUnpair.Enabled = phonesView.SelectedItems.Count > 0; };
             p.Controls.Add(phonesView);
-            btnPair.Text = "Aggiungi telefono";
+            btnPair.Text = L.T("Aggiungi telefono", "Add phone");
             btnPair.AutoSize = true;
             btnPair.Click += delegate { StartPairing(); };
-            btnUnpair.Text = "Rimuovi telefono";
+            btnUnpair.Text = L.T("Rimuovi telefono", "Remove phone");
             btnUnpair.AutoSize = true;
             btnUnpair.Enabled = false;
             btnUnpair.Click += delegate
@@ -262,8 +262,8 @@ namespace WinUsage
                 if (phonesView.SelectedItems.Count == 0) return;
                 long id = (long)phonesView.SelectedItems[0].Tag;
                 RemoteSecrets cur = service.SecretsCopy;
-                if (MessageBox.Show(this, "Rimuovere " + cur.NameOf(id) + "? Il suo codice Authenticator smetterà di funzionare e " +
-                                    "per usarlo di nuovo servirà un nuovo abbinamento. Gli altri telefoni ricevono un avviso.",
+                if (MessageBox.Show(this, L.T("Rimuovere ", "Remove ") + cur.NameOf(id) + L.T("? Il suo codice Authenticator smetterà di funzionare e ", "? Its Authenticator code will stop working and ") +
+                                    L.T("per usarlo di nuovo servirà un nuovo abbinamento. Gli altri telefoni ricevono un avviso.", "using it again will need a new pairing. The other phones get a notice."),
                                     "WinUsage", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                 service.RemovePhone(id);
                 drafts.Remove(id);
@@ -279,44 +279,44 @@ namespace WinUsage
             lblPairInfo.MaximumSize = new Size(w, 0);
             p.Controls.Add(lblPairInfo);
 
-            p.Controls.Add(Title("Privacy e sicurezza"));
-            p.Controls.Add(Note("I messaggi del bot passano dai server di Telegram senza cifratura end-to-end: Telegram può " +
-                                "leggere comandi, screenshot, app in uso e orari di accensione. Chi controlla il tuo account " +
-                                "Telegram può vedere il tuo schermo: attiva la verifica in due passaggi di Telegram. " +
-                                "Se perdi il telefono, revoca il token da @BotFather (/revoke). Se il PC lo usano anche altre " +
-                                "persone, avvisale: catturarne lo schermo senza dirlo può violare la loro privacy.", w));
+            p.Controls.Add(Title(L.T("Privacy e sicurezza", "Privacy and security")));
+            p.Controls.Add(Note(L.T("I messaggi del bot passano dai server di Telegram senza cifratura end-to-end: Telegram può ", "Bot messages go through Telegram's servers without end-to-end encryption: Telegram can ") +
+                                L.T("leggere comandi, screenshot, app in uso e orari di accensione. Chi controlla il tuo account ", "read commands, screenshots, apps in use and power-on times. Whoever controls your Telegram ") +
+                                L.T("Telegram può vedere il tuo schermo: attiva la verifica in due passaggi di Telegram. ", "account can see your screen: turn on Telegram's two-step verification. ") +
+                                L.T("Se perdi il telefono, revoca il token da @BotFather (/revoke). Se il PC lo usano anche altre ", "If you lose the phone, revoke the token from @BotFather (/revoke). If other people use the PC, ") +
+                                L.T("persone, avvisale: catturarne lo schermo senza dirlo può violare la loro privacy.", "tell them: capturing their screen without saying so may violate their privacy."), w));
             return tab;
         }
 
         private TabPage BuildCodeTab()
         {
-            TabPage tab = new TabPage("Codice");
+            TabPage tab = new TabPage(L.T("Codice", "Code"));
             FlowLayoutPanel p = Page(tab);
             int w = 560;
-            p.Controls.Add(Title("Codice dell'app Authenticator"));
-            p.Controls.Add(Note("Serve per i comandi protetti (di solito /blocca e /spegni). Ogni telefono ha il suo: scegli il " +
-                                "telefono, genera un segreto, inquadra il QR con l'app Authenticator di QUEL telefono (Google " +
-                                "Authenticator, Microsoft Authenticator o simili), poi scrivi qui il codice che mostra per " +
-                                "verificarlo. Il PC non chiede mai il codice in chat: lo scrivi tu nei comandi.", w));
+            p.Controls.Add(Title(L.T("Codice dell'app Authenticator", "Authenticator app code")));
+            p.Controls.Add(Note(L.T("Serve per i comandi protetti (di solito /blocca e /spegni). Ogni telefono ha il suo: scegli il ", "Needed for protected commands (usually /lock and /shutdown). Each phone has its own: choose the ") +
+                                L.T("telefono, genera un segreto, inquadra il QR con l'app Authenticator di QUEL telefono (Google ", "phone, generate a secret, scan the QR with the Authenticator app of THAT phone (Google ") +
+                                L.T("Authenticator, Microsoft Authenticator o simili), poi scrivi qui il codice che mostra per ", "Authenticator, Microsoft Authenticator or similar), then type here the code it shows to ") +
+                                L.T("verificarlo. Il PC non chiede mai il codice in chat: lo scrivi tu nei comandi.", "verify it. The PC never asks for the code in chat: you type it in the commands."), w));
             cmbPhone.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbPhone.Width = 300;
             cmbPhone.SelectedIndexChanged += delegate { RefreshTotp(); };
-            p.Controls.Add(Row(Inline("Telefono:"), cmbPhone));
+            p.Controls.Add(Row(Inline(L.T("Telefono:", "Phone:")), cmbPhone));
             lblTotp.AutoSize = true;
             lblTotp.Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold);
             p.Controls.Add(lblTotp);
             Button gen = new Button();
-            gen.Text = "Genera nuovo segreto";
+            gen.Text = L.T("Genera nuovo segreto", "Generate new secret");
             gen.AutoSize = true;
             gen.Click += delegate
             {
                 TotpDraft d = CurrentDraft();
                 if (d == null)
                 {
-                    MessageBox.Show(this, "Prima abbina un telefono (scheda Collegamento).", "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(this, L.T("Prima abbina un telefono (scheda Collegamento).", "Pair a phone first (Connection tab)."), "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                if (d.Verified && MessageBox.Show(this, "Il codice attuale di questo telefono smetterà di funzionare. Continuare?", "WinUsage",
+                if (d.Verified && MessageBox.Show(this, L.T("Il codice attuale di questo telefono smetterà di funzionare. Continuare?", "This phone's current code will stop working. Continue?"), "WinUsage",
                                                   MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                 d.Secret = Base32.Encode(Totp.NewSecret());
                 d.Verified = false;
@@ -333,7 +333,7 @@ namespace WinUsage
             txtVerify.Width = 90;
             txtVerify.MaxLength = 6;
             Button check = new Button();
-            check.Text = "Verifica codice";
+            check.Text = L.T("Verifica codice", "Check code");
             check.AutoSize = true;
             check.Click += delegate
             {
@@ -346,88 +346,88 @@ namespace WinUsage
                     txtVerify.Clear();
                     RefreshTotp();
                 }
-                else MessageBox.Show(this, "Codice non valido. Controlla che l'ora del PC e del telefono siano giuste e riprova.",
+                else MessageBox.Show(this, L.T("Codice non valido. Controlla che l'ora del PC e del telefono siano giuste e riprova.", "Invalid code. Check that the PC and phone clocks are right and try again."),
                                      "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             };
-            p.Controls.Add(Row(Inline("Codice mostrato dall'app:"), txtVerify, check));
-            p.Controls.Add(Note("Ricordati di premere Salva.", w));
+            p.Controls.Add(Row(Inline(L.T("Codice mostrato dall'app:", "Code shown by the app:")), txtVerify, check));
+            p.Controls.Add(Note(L.T("Ricordati di premere Salva.", "Remember to press Save."), w));
             return tab;
         }
 
         private TabPage BuildCommandsTab(RemoteSecrets s)
         {
-            TabPage tab = new TabPage("Comandi");
+            TabPage tab = new TabPage(L.T("Comandi", "Commands"));
             FlowLayoutPanel p = Page(tab);
             int w = 560;
-            p.Controls.Add(Title("Richiedono il codice dell'Authenticator"));
+            p.Controls.Add(Title(L.T("Richiedono il codice dell'Authenticator", "Require the Authenticator code")));
             p.Controls.Add(Check(chkCodeScreenshot, "/screenshot", s.CodeScreenshot));
-            p.Controls.Add(Check(chkCodeApp, "/app (applicazione in uso)", s.CodeApp));
-            p.Controls.Add(Check(chkCodeLock, "/blocca", s.CodeLock));
-            p.Controls.Add(Check(chkCodeShutdown, "/spegni", s.CodeShutdown));
+            p.Controls.Add(Check(chkCodeApp, L.T("/app (applicazione in uso)", "/app (app in use)"), s.CodeApp));
+            p.Controls.Add(Check(chkCodeLock, L.T("/blocca", "/lock"), s.CodeLock));
+            p.Controls.Add(Check(chkCodeShutdown, L.T("/spegni", "/shutdown"), s.CodeShutdown));
 
-            p.Controls.Add(Title("Spegnimento"));
-            p.Controls.Add(Row(Inline("Conto alla rovescia predefinito:"),
+            p.Controls.Add(Title(L.T("Spegnimento", "Shutdown")));
+            p.Controls.Add(Row(Inline(L.T("Conto alla rovescia predefinito:", "Default countdown:")),
                                Number(numShutdown, RemoteSettings.MinShutdownMinutes, RemoteSettings.MaxShutdownMinutes, working.ShutdownDefaultMinutes),
-                               Inline("minuti")));
-            p.Controls.Add(Note("A PC sbloccato lo spegnimento non è forzato: un documento non salvato lo ferma. " +
-                                "A PC bloccato nessuno può salvare, quindi le app vengono chiuse.", w));
+                               Inline(L.T("minuti", "minutes"))));
+            p.Controls.Add(Note(L.T("A PC sbloccato lo spegnimento non è forzato: un documento non salvato lo ferma. ", "With the PC unlocked shutdown is not forced: an unsaved document stops it. ") +
+                                L.T("A PC bloccato nessuno può salvare, quindi le app vengono chiuse.", "With the PC locked nobody can save, so apps are closed."), w));
 
             p.Controls.Add(Title("Screenshot"));
-            p.Controls.Add(Row(Inline("Cancella lo screenshot dalla chat dopo"), Number(numDelete, 0, 2880, working.ScreenshotDeleteMinutes),
-                               Inline("minuti (0 = mai)")));
+            p.Controls.Add(Row(Inline(L.T("Cancella lo screenshot dalla chat dopo", "Delete the screenshot from the chat after")), Number(numDelete, 0, 2880, working.ScreenshotDeleteMinutes),
+                               Inline(L.T("minuti (0 = mai)", "minutes (0 = never)"))));
             txtExclusions.Width = 260;
             txtExclusions.Text = s.ScreenshotExclusions;
-            p.Controls.Add(Row(Inline("Non catturare con in primo piano:"), txtExclusions));
-            p.Controls.Add(Note("Nomi dei processi separati da virgola (es. gestori di password).", w));
+            p.Controls.Add(Row(Inline(L.T("Non catturare con in primo piano:", "Do not capture with in the foreground:")), txtExclusions));
+            p.Controls.Add(Note(L.T("Nomi dei processi separati da virgola (es. gestori di password).", "Process names separated by commas (e.g. password managers)."), w));
 
-            p.Controls.Add(Title("Comandi in ritardo"));
-            p.Controls.Add(Row(Inline("Scarta /blocca, /spegni e /sblocca più vecchi di"), Number(numMaxAge, 30, 3600, working.MaxAgeSeconds), Inline("secondi")));
-            p.Controls.Add(Note("Telegram conserva i messaggi a PC spento: un /spegni mandato ore prima non deve partire al risveglio. " +
-                                "Gli altri comandi leggono soltanto e si eseguono anche in ritardo.", w));
+            p.Controls.Add(Title(L.T("Comandi in ritardo", "Late commands")));
+            p.Controls.Add(Row(Inline(L.T("Scarta /blocca, /spegni e /sblocca più vecchi di", "Discard /lock, /shutdown and /unlock older than")), Number(numMaxAge, 30, 3600, working.MaxAgeSeconds), Inline(L.T("secondi", "seconds"))));
+            p.Controls.Add(Note(L.T("Telegram conserva i messaggi a PC spento: un /spegni mandato ore prima non deve partire al risveglio. ", "Telegram keeps messages while the PC is off: a /shutdown sent hours earlier must not run on wake-up. ") +
+                                L.T("Gli altri comandi leggono soltanto e si eseguono anche in ritardo.", "The other commands only read and run even when late."), w));
             return tab;
         }
 
         private TabPage BuildNotifyTab()
         {
-            TabPage tab = new TabPage("Messaggi e notifiche");
+            TabPage tab = new TabPage(L.T("Messaggi e notifiche", "Messages and notifications"));
             FlowLayoutPanel p = Page(tab);
             int w = 560;
-            p.Controls.Add(Title("Messaggi al telefono"));
-            p.Controls.Add(Check(chkMsgOn, "Accensione (accesso a Windows)", working.MsgPowerOn));
-            p.Controls.Add(Check(chkMsgOff, "Spegnimento, riavvio, disconnessione e chiusura di WinUsage", working.MsgPowerOff));
-            p.Controls.Add(Check(chkMsgCrash, "Spegnimento improvviso (corrente, blocco)", working.MsgCrash));
-            p.Controls.Add(Check(chkMsgSleep, "Standby e ripresa", working.MsgSleep));
-            p.Controls.Add(Check(chkMsgLock, "Blocco e sblocco dello schermo", working.MsgLock));
+            p.Controls.Add(Title(L.T("Messaggi al telefono", "Messages to the phone")));
+            p.Controls.Add(Check(chkMsgOn, L.T("Accensione (accesso a Windows)", "Power on (sign-in to Windows)"), working.MsgPowerOn));
+            p.Controls.Add(Check(chkMsgOff, L.T("Spegnimento, riavvio, disconnessione e chiusura di WinUsage", "Shutdown, restart, sign-out and WinUsage closing"), working.MsgPowerOff));
+            p.Controls.Add(Check(chkMsgCrash, L.T("Spegnimento improvviso (corrente, blocco)", "Sudden shutdown (power cut, freeze)"), working.MsgCrash));
+            p.Controls.Add(Check(chkMsgSleep, L.T("Standby e ripresa", "Standby and resume"), working.MsgSleep));
+            p.Controls.Add(Check(chkMsgLock, L.T("Blocco e sblocco dello schermo", "Screen lock and unlock"), working.MsgLock));
 
-            p.Controls.Add(Title("Notifiche su questo PC (pixel art)"));
-            p.Controls.Add(Check(chkNTray, "Indicatore sull'icona quando il controllo remoto è attivo", working.NotifyTray));
-            p.Controls.Add(Check(chkNScreenshot, "Quando viene inviato uno screenshot", working.NotifyScreenshot));
-            p.Controls.Add(Check(chkNApp, "Quando il telefono chiede l'app in uso", working.NotifyApp));
-            p.Controls.Add(Check(chkNChat, "Messaggi arrivati con la chat chiusa (altrimenti la chat si apre da sola)", working.NotifyChat));
-            p.Controls.Add(Check(chkNLocked, "\"Bloccato da remoto\" allo sblocco", working.NotifyLocked));
-            p.Controls.Add(Check(chkNCountdown, "Conto alla rovescia dello spegnimento con Annulla", working.NotifyCountdown));
-            p.Controls.Add(Check(chkSounds, "Suoni 8 bit", working.Sounds));
-            p.Controls.Add(Note("Gli avvisi di sicurezza si vedono sempre. Il registro dei comandi è nella scheda Registro.", w));
+            p.Controls.Add(Title(L.T("Notifiche su questo PC (pixel art)", "Notifications on this PC (pixel art)")));
+            p.Controls.Add(Check(chkNTray, L.T("Indicatore sull'icona quando il controllo remoto è attivo", "Badge on the icon when remote control is on"), working.NotifyTray));
+            p.Controls.Add(Check(chkNScreenshot, L.T("Quando viene inviato uno screenshot", "When a screenshot is sent"), working.NotifyScreenshot));
+            p.Controls.Add(Check(chkNApp, L.T("Quando il telefono chiede l'app in uso", "When the phone asks for the app in use"), working.NotifyApp));
+            p.Controls.Add(Check(chkNChat, L.T("Messaggi arrivati con la chat chiusa (altrimenti la chat si apre da sola)", "Messages arriving with the chat closed (otherwise the chat opens by itself)"), working.NotifyChat));
+            p.Controls.Add(Check(chkNLocked, L.T("\"Bloccato da remoto\" allo sblocco", "\"Locked remotely\" on unlock"), working.NotifyLocked));
+            p.Controls.Add(Check(chkNCountdown, L.T("Conto alla rovescia dello spegnimento con Annulla", "Shutdown countdown with Cancel"), working.NotifyCountdown));
+            p.Controls.Add(Check(chkSounds, L.T("Suoni 8 bit", "8-bit sounds"), working.Sounds));
+            p.Controls.Add(Note(L.T("Gli avvisi di sicurezza si vedono sempre. Il registro dei comandi è nella scheda Registro.", "Security alerts are always shown. The command log is in the Log tab."), w));
 
             p.Controls.Add(Title("Chat"));
-            p.Controls.Add(Check(chkChatHistory, "Tieni la cronologia della chat fino al riavvio di WinUsage", working.ChatHistory));
-            p.Controls.Add(Note("La cronologia sta solo in memoria, mai sul disco: sparisce quando WinUsage si chiude o il PC si " +
-                                "riavvia. Disattivata, i messaggi spariscono a ogni chiusura della finestra della chat.", w));
+            p.Controls.Add(Check(chkChatHistory, L.T("Tieni la cronologia della chat fino al riavvio di WinUsage", "Keep the chat history until WinUsage restarts"), working.ChatHistory));
+            p.Controls.Add(Note(L.T("La cronologia sta solo in memoria, mai sul disco: sparisce quando WinUsage si chiude o il PC si ", "The history is only in memory, never on disk: it disappears when WinUsage closes or the PC ") +
+                                L.T("riavvia. Disattivata, i messaggi spariscono a ogni chiusura della finestra della chat.", "restarts. When off, messages disappear every time the chat window closes."), w));
             return tab;
         }
 
         private TabPage BuildLogTab()
         {
-            TabPage tab = new TabPage("Registro");
+            TabPage tab = new TabPage(L.T("Registro", "Log"));
             logView.Dock = DockStyle.Fill;
             logView.View = View.Details;
             logView.FullRowSelect = true;
-            logView.Columns.Add("Ora", 120);
-            logView.Columns.Add("Mittente", 110);
-            logView.Columns.Add("Comando", 150);
-            logView.Columns.Add("Esito", 260);
+            logView.Columns.Add(L.T("Ora", "Time"), 120);
+            logView.Columns.Add(L.T("Mittente", "Sender"), 110);
+            logView.Columns.Add(L.T("Comando", "Command"), 150);
+            logView.Columns.Add(L.T("Esito", "Result"), 260);
             Button refresh = new Button();
-            refresh.Text = "Aggiorna";
+            refresh.Text = L.T("Aggiorna", "Refresh");
             refresh.AutoSize = true;
             refresh.Dock = DockStyle.Bottom;
             refresh.Click += delegate { LoadLog(); };
@@ -461,11 +461,11 @@ namespace WinUsage
             RemoteSecrets s = service.SecretsCopy;
             string status;
             Color color = Color.DarkGreen;
-            if (service.Damaged) { status = "⚠ Configurazione danneggiata: reinserisci il token e salva"; color = Color.DarkRed; }
-            else if (!s.HasToken) { status = "Non configurato"; color = SystemColors.GrayText; }
-            else if (!service.Enabled) { status = "Disattivato"; color = SystemColors.GrayText; }
-            else if (!s.Paired) { status = "In ascolto: nessun telefono abbinato"; color = Color.DarkOrange; }
-            else status = s.Phones.Count == 1 ? "✔ Abbinato a " + s.Phones[0].Label : "✔ " + s.Phones.Count + " telefoni abbinati";
+            if (service.Damaged) { status = L.T("⚠ Configurazione danneggiata: reinserisci il token e salva", "⚠ Settings damaged: enter the token again and save"); color = Color.DarkRed; }
+            else if (!s.HasToken) { status = L.T("Non configurato", "Not set up"); color = SystemColors.GrayText; }
+            else if (!service.Enabled) { status = L.T("Disattivato", "Off"); color = SystemColors.GrayText; }
+            else if (!s.Paired) { status = L.T("In ascolto: nessun telefono abbinato", "Listening: no phone paired"); color = Color.DarkOrange; }
+            else status = s.Phones.Count == 1 ? L.T("✔ Abbinato a ", "✔ Paired with ") + s.Phones[0].Label : "✔ " + s.Phones.Count + L.T(" telefoni abbinati", " paired phones");
             lblStatus.Text = status;
             lblStatus.ForeColor = color;
             SyncPhones(s);
@@ -480,13 +480,13 @@ namespace WinUsage
             if (service.PairingOpen)
             {
                 int left = (int)Math.Max(0, (service.PairingUntilUtc - DateTime.UtcNow).TotalSeconds);
-                lblPairInfo.Text = "Scrivi al bot:  /abbina " + lblPairCode.Text.Trim() + "   (scade tra " + (left / 60) + ":" +
+                lblPairInfo.Text = L.T("Scrivi al bot:  /abbina ", "Send the bot:  /pair ") + lblPairCode.Text.Trim() + L.T("   (scade tra ", "   (expires in ") + (left / 60) + ":" +
                                    (left % 60).ToString("00", CultureInfo.InvariantCulture) + ")";
             }
             else if (lblPairCode.Text.Length > 0)
             {
                 lblPairCode.Text = "";
-                lblPairInfo.Text = "Abbinamento concluso, scaduto o chiuso. Per un altro telefono premi di nuovo Aggiungi telefono.";
+                lblPairInfo.Text = L.T("Abbinamento concluso, scaduto o chiuso. Per un altro telefono premi di nuovo Aggiungi telefono.", "Pairing finished, expired or closed. For another phone press Add phone again.");
             }
         }
 
@@ -547,9 +547,9 @@ namespace WinUsage
         private string CodeLabel(long id)
         {
             TotpDraft d;
-            if (!drafts.TryGetValue(id, out d) || Base32.Decode(d.Secret) == null || d.Secret.Length == 0) return "da configurare";
-            if (!d.Verified) return "da verificare";
-            return d.Changed ? "verificato (premi Salva)" : "✔ configurato";
+            if (!drafts.TryGetValue(id, out d) || Base32.Decode(d.Secret) == null || d.Secret.Length == 0) return L.T("da configurare", "to set up");
+            if (!d.Verified) return L.T("da verificare", "to verify");
+            return d.Changed ? L.T("verificato (premi Salva)", "verified (press Save)") : L.T("✔ configurato", "✔ set up");
         }
 
         private sealed class PhoneItem
@@ -572,7 +572,7 @@ namespace WinUsage
             TotpDraft d = CurrentDraft();
             if (d == null)
             {
-                lblTotp.Text = "Nessun telefono abbinato";
+                lblTotp.Text = L.T("Nessun telefono abbinato", "No phone paired");
                 lblTotp.ForeColor = SystemColors.GrayText;
                 SetQr(null);
                 lblSecret.Text = "";
@@ -583,20 +583,20 @@ namespace WinUsage
             byte[] secret = Base32.Decode(totpSecret);
             if (secret == null || secret.Length < 10)
             {
-                lblTotp.Text = "Non configurato per questo telefono";
+                lblTotp.Text = L.T("Non configurato per questo telefono", "Not set up for this phone");
                 lblTotp.ForeColor = SystemColors.GrayText;
                 SetQr(null);
                 lblSecret.Text = "";
                 return;
             }
-            lblTotp.Text = totpVerified ? "✔ Configurato e verificato" + (totpChanged ? " (premi Salva)" : "")
-                                        : "Da verificare: inquadra il QR e scrivi il codice";
+            lblTotp.Text = totpVerified ? L.T("✔ Configurato e verificato", "✔ Set up and verified") + (totpChanged ? L.T(" (premi Salva)", " (press Save)") : "")
+                                        : L.T("Da verificare: inquadra il QR e scrivi il codice", "To verify: scan the QR and type the code");
             lblTotp.ForeColor = totpVerified ? Color.DarkGreen : Color.DarkOrange;
             if (totpChanged && !totpVerified)
             {
                 SetQr(QrCode.Encode(Totp.ProvisioningUri(secret, Environment.MachineName)));   // stesso nome: ogni telefono ha solo il suo
                 string b32 = totpSecret;
-                System.Text.StringBuilder sb = new System.Text.StringBuilder("Chiave per l'inserimento manuale: ");
+                System.Text.StringBuilder sb = new System.Text.StringBuilder(L.T("Chiave per l'inserimento manuale: ", "Key for manual entry: "));
                 for (int i = 0; i < b32.Length; i += 4) sb.Append(b32.Substring(i, Math.Min(4, b32.Length - i))).Append(' ');
                 lblSecret.Text = sb.ToString().TrimEnd();
             }
@@ -631,7 +631,7 @@ namespace WinUsage
             string token = txtToken.Text.Trim();
             if (token.Length > 0 && token.IndexOf(':') < 0)
             {
-                MessageBox.Show(this, "Il token non sembra valido (ha la forma 123456789:ABC...).", "WinUsage",
+                MessageBox.Show(this, L.T("Il token non sembra valido (ha la forma 123456789:ABC...).", "The token does not look valid (it looks like 123456789:ABC...)."), "WinUsage",
                                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
@@ -675,7 +675,7 @@ namespace WinUsage
 
             if (unverified)
             {
-                if (MessageBox.Show(this, "Un nuovo segreto dell'Authenticator non è stato verificato e non verrà salvato. Continuare?",
+                if (MessageBox.Show(this, L.T("Un nuovo segreto dell'Authenticator non è stato verificato e non verrà salvato. Continuare?", "A new Authenticator secret has not been verified and will not be saved. Continue?"),
                                     "WinUsage", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
             }
 
@@ -689,7 +689,7 @@ namespace WinUsage
             catch (Exception ex)
             {
                 Log.Write(ex);
-                MessageBox.Show(this, "Salvataggio non riuscito: " + ex.Message, "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, L.T("Salvataggio non riuscito: ", "Saving failed: ") + ex.Message, "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
@@ -698,7 +698,7 @@ namespace WinUsage
         {
             if (txtToken.Text.Trim().Length == 0)
             {
-                MessageBox.Show(this, "Prima inserisci il token del bot.", "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, L.T("Prima inserisci il token del bot.", "Enter the bot token first."), "WinUsage", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             chkEnabled.Checked = true;

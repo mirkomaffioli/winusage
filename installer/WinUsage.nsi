@@ -6,7 +6,7 @@
 Unicode true
 
 !define APPNAME   "WinUsage"
-!define VERSION   "1.5.0"
+!define VERSION   "1.6.1"
 !define EXENAME   "WinUsage.exe"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinUsage"
 !define RUNKEY    "Software\Microsoft\Windows\CurrentVersion\Run"
@@ -21,6 +21,14 @@ BrandingText "${APPNAME} ${VERSION}"
 ShowInstDetails nevershow
 ShowUninstDetails nevershow
 
+; --- firma del codice (facoltativa) ----------------------------------------
+; Con -DSIGN=percorso dello script (lo passano build-installer.sh/.bat se la firma e' configurata) makensis firma il
+; programma di disinstallazione mentre lo crea e poi l'installer finito. %1 = file da firmare.
+!ifdef SIGN
+  !uninstfinalize '"${SIGN}" "%1"' = 0
+  !finalize '"${SIGN}" "%1"' = 0
+!endif
+
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 
@@ -34,15 +42,17 @@ ShowUninstDetails nevershow
 !define MUI_HEADERIMAGE_BITMAP   "header.bmp"
 !define MUI_HEADERIMAGE_UNBITMAP "header.bmp"
 
-!define MUI_WELCOMEPAGE_TITLE "Benvenuto in ${APPNAME}"
-!define MUI_WELCOMEPAGE_TEXT "Questa procedura installa ${APPNAME} ${VERSION}, che vive nella tray di Windows e misura da quanto tempo stai usando il computer (standby escluso).$\r$\n$\r$\nL'installazione e' solo per il tuo utente e non richiede privilegi di amministratore. Ogni utente di Windows ha il proprio storico e la propria configurazione.$\r$\n$\r$\nFai clic su Avanti per continuare."
+; Testi in italiano e inglese (dalla 1.6): la lingua e' quella di Windows, come per l'app
+; (italiano se Windows e' in italiano, altrimenti inglese).
+!define MUI_WELCOMEPAGE_TITLE "$(TxtWelcomeTitle)"
+!define MUI_WELCOMEPAGE_TEXT "$(TxtWelcome)"
 
-!define MUI_FINISHPAGE_TITLE "${APPNAME} e' pronto"
-!define MUI_FINISHPAGE_TEXT "Installazione completata.$\r$\n$\r$\nCerca l'elmo da palombaro nella tray (vicino all'orologio): clic sinistro per il tempo di utilizzo, clic destro per storico, configurazione e uscita."
+!define MUI_FINISHPAGE_TITLE "$(TxtFinishTitle)"
+!define MUI_FINISHPAGE_TEXT "$(TxtFinish)"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXENAME}"
-!define MUI_FINISHPAGE_RUN_TEXT "Avvia ${APPNAME} adesso"
+!define MUI_FINISHPAGE_RUN_TEXT "$(TxtRunNow)"
 
-!define MUI_UNCONFIRMPAGE_TEXT_TOP "${APPNAME} verra' rimosso da questo computer per il tuo utente. Se e' in esecuzione verra' chiuso."
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "$(TxtUnconfirm)"
 
 ; --- pagine --------------------------------------------------------------
 !insertmacro MUI_PAGE_WELCOME
@@ -55,15 +65,32 @@ ShowUninstDetails nevershow
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 
+; la prima lingua e' quella usata se Windows non e' ne' in italiano ne' in inglese
+!insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "Italian"
+
+LangString TxtWelcomeTitle ${LANG_ITALIAN} "Benvenuto in ${APPNAME}"
+LangString TxtWelcomeTitle ${LANG_ENGLISH} "Welcome to ${APPNAME}"
+LangString TxtWelcome ${LANG_ITALIAN} "Questa procedura installa ${APPNAME} ${VERSION}, che vive nella tray di Windows e misura da quanto tempo stai usando il computer (standby escluso).$\r$\n$\r$\nL'installazione e' solo per il tuo utente e non richiede privilegi di amministratore. Ogni utente di Windows ha il proprio storico e la propria configurazione.$\r$\n$\r$\nFai clic su Avanti per continuare."
+LangString TxtWelcome ${LANG_ENGLISH} "This will install ${APPNAME} ${VERSION}, which lives in the Windows tray and measures how long you have been using the computer (standby excluded).$\r$\n$\r$\nThe installation is for your user only and needs no administrator rights. Each Windows user has their own history and settings.$\r$\n$\r$\nClick Next to continue."
+LangString TxtFinishTitle ${LANG_ITALIAN} "${APPNAME} e' pronto"
+LangString TxtFinishTitle ${LANG_ENGLISH} "${APPNAME} is ready"
+LangString TxtFinish ${LANG_ITALIAN} "Installazione completata.$\r$\n$\r$\nCerca l'elmo da palombaro nella tray (vicino all'orologio): clic sinistro per il tempo di utilizzo, clic destro per storico, configurazione e uscita."
+LangString TxtFinish ${LANG_ENGLISH} "Installation complete.$\r$\n$\r$\nLook for the diving helmet in the tray (near the clock): left-click for the usage time, right-click for history, settings and exit."
+LangString TxtRunNow ${LANG_ITALIAN} "Avvia ${APPNAME} adesso"
+LangString TxtRunNow ${LANG_ENGLISH} "Start ${APPNAME} now"
+LangString TxtUnconfirm ${LANG_ITALIAN} "${APPNAME} verra' rimosso da questo computer per il tuo utente. Se e' in esecuzione verra' chiuso."
+LangString TxtUnconfirm ${LANG_ENGLISH} "${APPNAME} will be removed from this computer for your user. If it is running it will be closed."
+LangString TxtDeleteData ${LANG_ITALIAN} "Vuoi eliminare anche lo storico e la configurazione di questo utente?$\r$\n($LOCALAPPDATA\WinUsage)"
+LangString TxtDeleteData ${LANG_ENGLISH} "Do you also want to delete this user's history and settings?$\r$\n($LOCALAPPDATA\WinUsage)"
 
 ; --- informazioni sul file -----------------------------------------------
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey /LANG=${LANG_ITALIAN} "ProductName"     "${APPNAME}"
-VIAddVersionKey /LANG=${LANG_ITALIAN} "FileDescription" "Installer di ${APPNAME}"
-VIAddVersionKey /LANG=${LANG_ITALIAN} "FileVersion"     "${VERSION}"
-VIAddVersionKey /LANG=${LANG_ITALIAN} "ProductVersion"  "${VERSION}"
-VIAddVersionKey /LANG=${LANG_ITALIAN} "LegalCopyright"  "${APPNAME}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductName"     "${APPNAME}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "FileDescription" "${APPNAME} installer"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "FileVersion"     "${VERSION}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductVersion"  "${VERSION}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "LegalCopyright"  "${APPNAME}"
 
 ; --- chiusura dell'app in esecuzione --------------------------------------
 ; Prima chiede all'app di chiudersi da sola (salva i dati), poi, se serve, la termina.
@@ -125,7 +152,7 @@ Section "Uninstall"
   ; storico e configurazione dell'utente: li elimina solo se richiesto
   IfFileExists "$LOCALAPPDATA\WinUsage\*.*" 0 done
     MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
-      "Vuoi eliminare anche lo storico e la configurazione di questo utente?$\r$\n($LOCALAPPDATA\WinUsage)" \
+      "$(TxtDeleteData)" \
       /SD IDNO IDNO done
     RMDir /r "$LOCALAPPDATA\WinUsage"
   done:

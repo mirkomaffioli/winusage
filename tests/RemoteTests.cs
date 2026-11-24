@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 // Collaudo del controllo remoto (logica, senza rete né finestre): vedi run-tests.sh.
 namespace WinUsage.Tests
@@ -581,6 +582,157 @@ namespace WinUsage.Tests
             Eq(true, PixelFont.CanDraw("Bloccato alle 15:02"), "testo disegnabile");
             Eq(false, PixelFont.CanDraw("ciao 😀"), "emoji non disegnabile");
             Eq(PixelFont.Measure("E'", 1), PixelFont.Measure("È", 1), "misura dopo la normalizzazione");
+
+            Console.WriteLine("[R10] Lingua inglese");
+            System.Globalization.CultureInfo itCulture = new System.Globalization.CultureInfo("it-IT");
+            System.Globalization.CultureInfo enCulture = new System.Globalization.CultureInfo("en-US");
+            System.Globalization.CultureInfo deCulture = new System.Globalization.CultureInfo("de-DE");
+            Eq(false, L.ResolveEnglish(L.Auto, itCulture), "automatica con Windows in italiano: italiano");
+            Eq(true, L.ResolveEnglish(L.Auto, enCulture), "automatica con Windows in inglese: inglese");
+            Eq(true, L.ResolveEnglish(L.Auto, deCulture), "automatica con Windows in un'altra lingua: inglese");
+            Eq(false, L.ResolveEnglish(L.Italian, enCulture), "scelta manuale italiano vince su Windows");
+            Eq(true, L.ResolveEnglish(L.English, itCulture), "scelta manuale inglese vince su Windows");
+            Eq(L.Auto, L.Choice(null), "senza impostazione: automatica");
+
+            string ec; string[] ea;
+            RemoteController.ParseCommand("/lock 123456", out ec, out ea);
+            Eq("blocca", ec, "/lock = /blocca");
+            RemoteController.ParseCommand("/shutdown@MioBot 10", out ec, out ea);
+            Eq("spegni", ec, "/shutdown = /spegni (anche con il nome del bot)");
+            RemoteController.ParseCommand("/Cancel", out ec, out ea);
+            Eq("annulla", ec, "/cancel = /annulla");
+            foreach (string[] pair in new[] { new[] { "status", "stato" }, new[] { "unlock", "sblocca" }, new[] { "phones", "telefoni" },
+                                               new[] { "pair", "abbina" }, new[] { "help", "aiuto" } })
+                Eq(pair[1], RemoteController.Canonical(pair[0]), "/" + pair[0] + " = /" + pair[1]);
+            Eq("blocca", RemoteController.Canonical("blocca"), "i nomi italiani restano validi");
+            Eq("/blocca", RemoteController.Cmd("blocca"), "nome mostrato in italiano");
+
+            L.En = true;
+            try
+            {
+                Eq("/lock", RemoteController.Cmd("blocca"), "nome mostrato in inglese");
+                Eq("1 hour and 5 minutes", Fmt.Long(3900), "durata in inglese");
+                Eq("2 HRS 30 MIN", Fmt.ToastTime(9000), "durata del toast in inglese");
+                Eq("System", TimerIds.Labels[0], "nome del timer in inglese");
+                Eq(true, RemoteController.When(evening, evening).StartsWith("at "), "ora in inglese");
+                Eq(true, RemoteController.When(evening.AddDays(-1), evening).StartsWith("yesterday at "), "ieri in inglese");
+                Eq(true, PowerMessages.On(evening, true, evening).StartsWith("🟢 PC on — "), "accensione in inglese");
+                Eq(true, PowerMessages.Late("x", evening, evening.AddHours(9)).EndsWith("(sent late)"), "in ritardo in inglese");
+
+                FakeHost eh = new FakeHost();
+                RemoteSecrets es = new RemoteSecrets();
+                PairedPhone ep = new PairedPhone(); ep.Id = 42; ep.Name = "Mirko"; es.Phones.Add(ep);
+                RemoteController enc = new RemoteController(eh, es, new RemoteSettings(), delegate(long id) { return 0; });
+                DateTime et = new DateTime(2026, 11, 24, 18, 0, 0, DateTimeKind.Utc);
+                enc.Process(Msg(42, "/help", et), et);
+                Eq(true, eh.Last.Contains("/shutdown") && eh.Last.Contains("/lock") && !eh.Last.Contains("/spegni"),
+                   "l'aiuto in inglese mostra i comandi inglesi");
+                enc.Process(Msg(42, "/lock", et), et);
+                Eq(true, eh.Last.StartsWith("The Authenticator code for this phone") || eh.Last.Contains("not yet"),
+                   "risposta in inglese: " + eh.Last.Split('\n')[0]);
+                enc.Process(Msg(42, "/blocca", et), et);
+                Eq(true, eh.Last.Contains("not yet"), "anche il comando italiano risponde in inglese");
+                enc.Process(Msg(42, "/cancel", et), et);
+                Eq("No shutdown in progress.", eh.Last, "/cancel in inglese");
+                enc.Process(Msg(42, "/nope", et), et);
+                Eq("Unknown command. /help for the list.", eh.Last, "comando sconosciuto in inglese");
+                Eq(true, RemoteController.LockedShutdownNote.StartsWith("🔒 The PC is locked"), "avviso PC bloccato in inglese");
+            }
+            finally { L.En = false; }
+            Eq("1 ora e 5 minuti", Fmt.Long(3900), "di nuovo in italiano");
+
+            NetworkTests();
+        }
+
+        /// <summary>
+        /// [R11] Client Telegram contro il server finto: quello che nella 1.6.0 faceva perdere i comandi (Abort che dopo un
+        /// invio non fermava più la lettura) e i tempi dei nuovi tentativi di invio.
+        /// </summary>
+        private static void NetworkTests()
+        {
+            Console.WriteLine("[R11] Rete: lettura, invii e connessioni (server Telegram finto)");
+            string savedBase = TelegramApi.BaseUrl;
+            FakeTelegram tg = new FakeTelegram();
+            TelegramApi.BaseUrl = tg.BaseUrl;
+            try
+            {
+                // 1) Abort ferma la lettura in attesa anche se nel frattempo la stessa istanza ha mandato un messaggio
+                TelegramApi api = new TelegramApi("1:TEST");
+                Exception readError = null;
+                Thread reader = new Thread(delegate()
+                {
+                    try { api.GetUpdates(0, 20); } catch (Exception ex) { readError = ex; }
+                });
+                reader.IsBackground = true;
+                reader.Start();
+                Eq(true, FakeTelegram.WaitFor(delegate { return tg.PollPending; }, 5000), "lettura in attesa sul server");
+                Eq(true, api.SendMessage(FakeTelegram.Phone, "risposta", 10000) > 0, "invio con la stessa istanza durante la lettura");
+                api.Abort();
+                Eq(true, reader.Join(3000), "Abort ferma la lettura anche dopo un invio (nella 1.6.0 restava appesa)");
+                Eq(true, readError is TelegramException, "la lettura interrotta finisce con un errore di rete");
+
+                // 2) Abort non tocca un invio in corso (nella 1.6.0 interrompeva la risposta al posto della lettura)
+                tg.SlowSendMs = 1200;
+                Exception sendError = null;
+                long slowId = 0;
+                Thread sender = new Thread(delegate()
+                {
+                    try { slowId = api.SendMessage(FakeTelegram.Phone, "lento", 10000); } catch (Exception ex) { sendError = ex; }
+                });
+                sender.IsBackground = true;
+                sender.Start();
+                Thread.Sleep(300);
+                api.Abort();
+                sender.Join(5000);
+                tg.SlowSendMs = 0;
+                Eq("", sendError == null ? "" : sendError.Message, "Abort non interrompe un invio in corso");
+                Eq(true, slowId > 0, "l'invio lento arriva");
+
+                // 3) dopo Close nessuna lettura parte più (thread di lettura fermato), gli invii sì
+                TelegramApi closing = new TelegramApi("1:TEST");
+                closing.Close();
+                int before = tg.Polls;
+                bool refused = false;
+                try { closing.GetUpdates(0, 1); } catch (TelegramException) { refused = true; }
+                Eq(true, refused, "dopo Close la lettura è rifiutata");
+                Eq(before, tg.Polls, "dopo Close nessuna lettura arriva al server");
+                Eq(true, closing.SendMessage(FakeTelegram.Phone, "ok", 10000) > 0, "dopo Close gli invii funzionano ancora");
+
+                // 4) connessioni: la lettura riusa la sua finché NewConnections non ne chiede una nuova; gli invii mai
+                TelegramApi conn = new TelegramApi("1:TEST");
+                tg.Inject("/a");
+                UpdateBatch b1 = conn.GetUpdates(0, 5);
+                int p1 = tg.LastPollPort;
+                tg.Inject("/b");
+                UpdateBatch b2 = conn.GetUpdates(b1.NextOffset, 5);
+                int p2 = tg.LastPollPort;
+                Eq(1, b2.Messages.Count, "seconda lettura: un messaggio");
+                Eq(true, p1 == p2, "letture di seguito sulla stessa connessione");
+                TelegramApi.NewConnections();
+                tg.Inject("/c");
+                UpdateBatch b3 = conn.GetUpdates(b2.NextOffset, 5);
+                Eq(1, b3.Messages.Count, "lettura dopo NewConnections: un messaggio");
+                Eq(true, tg.LastPollPort != p2, "dopo NewConnections (risveglio, rete) la lettura usa una connessione nuova");
+                conn.SendMessage(FakeTelegram.Phone, "uno", 10000);
+                conn.SendMessage(FakeTelegram.Phone, "due", 10000);
+                List<FakeTelegram.Sent> s = tg.SentMessages;
+                int sa = s[s.Count - 2].Port, sb = s[s.Count - 1].Port;
+                Eq(true, sa != sb && sa != tg.LastPollPort && sb != tg.LastPollPort, "ogni invio su una connessione nuova");
+            }
+            finally
+            {
+                TelegramApi.BaseUrl = savedBase;
+                tg.Dispose();
+            }
+
+            // 5) tempi dei nuovi tentativi di invio
+            StringBuilder delays = new StringBuilder();
+            for (int i = 1; i <= 7; i++) delays.Append(i > 1 ? "," : "").Append(SendRetry.DelaySeconds(i));
+            Eq("1,2,4,8,15,15,15", delays.ToString(), "attese tra i tentativi di invio (secondi; nella 1.6.0 fino a 300)");
+            DateTime t = new DateTime(2026, 11, 24, 18, 0, 0, DateTimeKind.Utc);
+            Eq(false, SendRetry.GiveUp(true, t, t.AddDays(2)), "un messaggio della coda nel database non si abbandona");
+            Eq(false, SendRetry.GiveUp(false, t, t.AddMinutes(2)), "una risposta si riprova per 2 minuti");
+            Eq(true, SendRetry.GiveUp(false, t, t.AddMinutes(4)), "una risposta di 4 minuti si abbandona");
         }
     }
 }

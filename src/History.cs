@@ -14,10 +14,10 @@ namespace WinUsage
         public DateTime[] Dates;
         public double[][] Seconds;   // [giorno][timer]
 
+        /// <summary>Cultura per i nomi di giorni e mesi (italiano o inglese, come l'interfaccia).</summary>
         public static CultureInfo Italian()
         {
-            try { return new CultureInfo("it-IT"); }
-            catch (Exception) { return CultureInfo.InvariantCulture; }
+            return L.Culture;
         }
 
         /// <param name="liveToday">Valori di oggi ancora non salvati (se null si usa solo il database).</param>
@@ -51,7 +51,7 @@ namespace WinUsage
 
         public string ShortLabel(int i)
         {
-            if (i == DayKeys.Length - 1) return "oggi";
+            if (i == DayKeys.Length - 1) return L.T("oggi", "today");
             return Dates[i].ToString("ddd dd/MM", Italian());
         }
 
@@ -59,7 +59,7 @@ namespace WinUsage
         {
             string s = Dates[i].ToString("dddd d MMMM", Italian());
             if (s.Length > 0) s = char.ToUpper(s[0], Italian()) + s.Substring(1);
-            return i == DayKeys.Length - 1 ? s + " (oggi)" : s;
+            return i == DayKeys.Length - 1 ? s + L.T(" (oggi)", " (today)") : s;
         }
 
         public int Days { get { return DayKeys.Length; } }
@@ -67,7 +67,7 @@ namespace WinUsage
         /// <summary>Etichetta corta per l'asse del grafico quando i giorni sono tanti: "08/11", "oggi".</summary>
         public string AxisLabel(int i)
         {
-            if (i == DayKeys.Length - 1) return "oggi";
+            if (i == DayKeys.Length - 1) return L.T("oggi", "today");
             return Dates[i].ToString("dd/MM", CultureInfo.InvariantCulture);
         }
 
@@ -199,7 +199,7 @@ namespace WinUsage
                         avgPen.DashStyle = DashStyle.Dash;
                         g.DrawLine(avgPen, plot.Left, ay, plot.Right, ay);
                     }
-                    string avgText = "media " + Fmt.Compact(avg);
+                    string avgText = L.T("media ", "average ") + Fmt.Compact(avg);
                     SizeF sz = g.MeasureString(avgText, font);
                     float ty = Math.Max(plot.Top, ay - sz.Height);
                     using (Brush backBrush = new SolidBrush(Color.FromArgb(220, back)))
