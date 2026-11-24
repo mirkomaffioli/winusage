@@ -26,6 +26,7 @@ namespace WinUsage
         public string Line3 = "";
         public string FreeText;              // testo libero (non null = disegnato dalla finestra in TextArea)
         public string Button;                // etichetta del pulsante, o null
+        public string Button2;               // secondo pulsante (a sinistra del primo, arancione), o null
         public double Level = 1.0;           // bombola del conto alla rovescia: 1 piena, 0 vuota
 
         private static readonly int[] Bob = { 0, 1, 0, -1 };
@@ -84,6 +85,18 @@ namespace WinUsage
             }
         }
 
+        /// <summary>Secondo pulsante, in pixel logici, a sinistra del primo (vuoto se non c'è).</summary>
+        public Rectangle Button2Rect
+        {
+            get
+            {
+                if (Button2 == null || Button == null) return Rectangle.Empty;
+                int w = PixelFont.Measure(Button2, 1) + 10;
+                Rectangle b = ButtonRect;
+                return new Rectangle(b.Left - 4 - w, b.Top, w, 13);
+            }
+        }
+
         public Bitmap RenderFrame(int frame)
         {
             using (Graphics g = Graphics.FromImage(frameBmp))
@@ -108,6 +121,7 @@ namespace WinUsage
                 DrawTexts(g);
                 DrawIcon(g, frame);
                 if (Button != null) DrawButton(g, ButtonRect, Button, Kind == NotifyKind.Countdown);
+                if (!Button2Rect.IsEmpty) DrawButton(g, Button2Rect, Button2, true);
             }
             return frameBmp;
         }
@@ -136,7 +150,8 @@ namespace WinUsage
             }
             if (!string.IsNullOrEmpty(Line3))
             {
-                int room = Button != null ? ButtonRect.Left - TextX - 4 : TextWidth;
+                int left = !Button2Rect.IsEmpty ? Button2Rect.Left : Button != null ? ButtonRect.Left : TextX + TextWidth + 4;
+                int room = left - TextX - 4;
                 PixelFont.DrawShadow(g, Fit(Line3, room), TextX, 43, TagColor, Shadow, 1);
             }
         }

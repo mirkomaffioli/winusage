@@ -58,6 +58,29 @@ namespace WinUsage
         [DllImport("advapi32.dll", SetLastError = true)]
         private static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TOKEN_PRIVILEGES state, int len, IntPtr prev, IntPtr retLen);
 
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint InitiateShutdown(string machine, string message, uint gracePeriod, uint flags, uint reason);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint SetThreadExecutionState(uint flags);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+
+        private delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, IntPtr rect, IntPtr data);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc callback, IntPtr data);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
         private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
         // ---- applicazione in primo piano ----
@@ -190,16 +213,63 @@ namespace WinUsage
                 return r;
             }
 
-            Rectangle area;
-            Screen[] screens = Screen.AllScreens;
-            if (monitor <= 0) area = SystemInformation.VirtualScreen;
-            else if (monitor <= screens.Length) area = screens[monitor - 1].Bounds;
-            else
+            // Coordinate e cattura in pixel fisici. Senza questo, con lo schermo scalato (125%, 150%...) Windows dà a WinUsage
+            // coordinate ridotte e la cattura copre solo la parte in alto a sinistra dello schermo. Il contesto vale solo per
+            // questo thread e solo durante la cattura: le finestre dell'app non cambiano.
+            IntPtr previous = IntPtr.Zero;
+            try { previous = SetThreadDpiAwarenessContext(new IntPtr(-4)); }   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            catch (Exception) { /* Windows 10 precedente alla 1607: si resta come prima */ }
+            try
             {
-                r.Error = "Monitor " + monitor + " inesistente: ce ne sono " + screens.Length + ".";
-                return r;
+                List<Rectangle> monitors = PhysicalMonitors();
+                Rectangle area;
+                if (monitors.Count == 0)
+                {
+                    Screen[] screens = Screen.AllScreens;
+                    monitors.Clear();
+                    foreach (Screen sc in screens) monitors.Add(sc.Bounds);
+                }
+                if (monitor <= 0)
+                {
+                    area = monitors[0];
+                    foreach (Rectangle m in monitors) area = Rectangle.Union(area, m);
+                }
+                else if (monitor <= monitors.Count) area = monitors[monitor - 1];
+                else
+                {
+                    r.Error = "Monitor " + monitor + " inesistente: ce ne sono " + monitors.Count + ".";
+                    return r;
+                }
+                CaptureArea(area, hd, r);
             }
+            finally
+            {
+                if (previous != IntPtr.Zero) { try { SetThreadDpiAwarenessContext(previous); } catch (Exception) { } }
+            }
+            return r;
+        }
 
+        /// <summary>Rettangoli dei monitor nell'ordine di Windows (lo stesso di Screen.AllScreens), nelle coordinate del thread.</summary>
+        private static List<Rectangle> PhysicalMonitors()
+        {
+            List<Rectangle> list = new List<Rectangle>();
+            try
+            {
+                EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr hmon, IntPtr hdc, IntPtr rect, IntPtr data)
+                {
+                    MONITORINFO mi = new MONITORINFO();
+                    mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+                    if (GetMonitorInfo(hmon, ref mi))
+                        list.Add(Rectangle.FromLTRB(mi.rcMonitor.Left, mi.rcMonitor.Top, mi.rcMonitor.Right, mi.rcMonitor.Bottom));
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch (Exception ex) { Log.Write(ex); list.Clear(); }
+            return list;
+        }
+
+        private static void CaptureArea(Rectangle area, bool hd, ScreenshotResult r)
+        {
             try
             {
                 using (Bitmap bmp = new Bitmap(area.Width, area.Height, PixelFormat.Format24bppRgb))
@@ -212,7 +282,7 @@ namespace WinUsage
                         r.Png = true;
                         r.Data = Encode(bmp, ImageFormat.Png, 0);
                         if (r.Data.Length > 45 * 1024 * 1024) r.Error = "Screenshot troppo grande per Telegram: prova senza hd.";
-                        return r;
+                        return;
                     }
 
                     // sendPhoto: larghezza + altezza al massimo 10000 pixel e file sotto i 10 MB
@@ -237,7 +307,6 @@ namespace WinUsage
                 Log.Write(ex);
                 r.Error = "Screenshot non riuscito.";
             }
-            return r;
         }
 
         private static byte[] Encode(Bitmap bmp, ImageFormat format, long quality)
@@ -273,29 +342,29 @@ namespace WinUsage
         }
 
         /// <summary>
-        /// Spegne il PC senza forzare: un'app con un documento non salvato può fermare lo spegnimento (solo le app
-        /// bloccate vengono chiuse). Il privilegio di spegnimento è già dell'utente: va solo attivato.
+        /// Spegne il PC. Senza <paramref name="force"/> non forza: un'app con un documento non salvato può fermare lo
+        /// spegnimento (solo le app bloccate vengono chiuse). Con force chiude anche quelle (serve a PC bloccato, dove
+        /// nessuno può rispondere). Usa InitiateShutdown, che funziona anche con lo schermo bloccato (ExitWindowsEx no);
+        /// ExitWindowsEx resta come riserva. Il privilegio di spegnimento è già dell'utente: va solo attivato.
         /// </summary>
-        public static bool PowerOff()
+        public static bool PowerOff(bool force)
         {
             try
             {
-                IntPtr token;
-                if (OpenProcessToken(Process.GetCurrentProcess().Handle, 0x0020 | 0x0008, out token))   // ADJUST_PRIVILEGES | QUERY
-                {
-                    try
-                    {
-                        TOKEN_PRIVILEGES tp = new TOKEN_PRIVILEGES();
-                        tp.Count = 1;
-                        tp.Attributes = 0x2;   // SE_PRIVILEGE_ENABLED
-                        if (LookupPrivilegeValue(null, "SeShutdownPrivilege", out tp.Luid))
-                            AdjustTokenPrivileges(token, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
-                    }
-                    finally { CloseHandle(token); }
-                }
-                const uint EWX_POWEROFF = 0x00000008, EWX_FORCEIFHUNG = 0x00000010;
+                EnableShutdownPrivilege();
+                const uint SHUTDOWN_FORCE_OTHERS = 0x1, SHUTDOWN_FORCE_SELF = 0x2, SHUTDOWN_POWEROFF = 0x8;
                 const uint SHTDN_REASON_MAJOR_OTHER = 0x00000000, SHTDN_REASON_FLAG_PLANNED = 0x80000000;
-                bool ok = ExitWindowsEx(EWX_POWEROFF | EWX_FORCEIFHUNG, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED);
+                uint reason = SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED;
+                uint flags = SHUTDOWN_POWEROFF | (force ? SHUTDOWN_FORCE_OTHERS | SHUTDOWN_FORCE_SELF : 0);
+                uint err;
+                try { err = InitiateShutdown(null, null, 0, flags, reason); }
+                catch (EntryPointNotFoundException) { err = 120; }
+                if (err == 0) return true;
+                if (err == 1115) return true;   // ERROR_SHUTDOWN_IN_PROGRESS: già in corso
+                Log.Write("InitiateShutdown non riuscito, errore " + err + ": si prova con ExitWindowsEx");
+
+                const uint EWX_POWEROFF = 0x00000008, EWX_FORCE = 0x00000004, EWX_FORCEIFHUNG = 0x00000010;
+                bool ok = ExitWindowsEx(EWX_POWEROFF | (force ? EWX_FORCE : EWX_FORCEIFHUNG), reason);
                 if (!ok) Log.Write("ExitWindowsEx non riuscito, errore " + Marshal.GetLastWin32Error());
                 return ok;
             }
@@ -304,6 +373,33 @@ namespace WinUsage
                 Log.Write(ex);
                 return false;
             }
+        }
+
+        private static void EnableShutdownPrivilege()
+        {
+            IntPtr token;
+            if (!OpenProcessToken(Process.GetCurrentProcess().Handle, 0x0020 | 0x0008, out token)) return;   // ADJUST_PRIVILEGES | QUERY
+            try
+            {
+                TOKEN_PRIVILEGES tp = new TOKEN_PRIVILEGES();
+                tp.Count = 1;
+                tp.Attributes = 0x2;   // SE_PRIVILEGE_ENABLED
+                if (LookupPrivilegeValue(null, "SeShutdownPrivilege", out tp.Luid))
+                    AdjustTokenPrivileges(token, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
+            }
+            finally { CloseHandle(token); }
+        }
+
+        /// <summary>
+        /// Durante il conto alla rovescia il PC deve restare sveglio: niente standby per inattività e niente schermo spento
+        /// (con lo standby moderno, schermo spento a PC bloccato vuol dire app congelate e conto alla rovescia fermo).
+        /// Da chiamare sempre dallo stesso thread (quello dell'interfaccia).
+        /// </summary>
+        public static void KeepAwake(bool on)
+        {
+            const uint ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x00000001, ES_DISPLAY_REQUIRED = 0x00000002;
+            try { SetThreadExecutionState(on ? ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED : ES_CONTINUOUS); }
+            catch (Exception ex) { Log.Write(ex); }
         }
     }
 }

@@ -38,6 +38,8 @@ namespace WinUsage.Tests
         public bool CancelShutdown(bool fromRemote) { bool was = Shutdown; Shutdown = false; return was; }
         public bool ShutdownActive { get { return Shutdown; } }
         public void OpenChat(bool requestedRemotely) { ChatOpened++; }
+        public bool Locked;
+        public bool PcLocked { get { return Locked; } }
         public void DeliverChat(string text, DateTime sentUtc) { Chats.Add(text); }
         public void DisableRemote() { Disabled++; }
         public void ConfirmPairing(long userId, string name, Action<bool> done) { done(ConfirmAnswer); }
@@ -279,7 +281,11 @@ namespace WinUsage.Tests
             h.ScreenshotError = null;
 
             c.Process(Msg(42, "/stato", t.AddMinutes(-10)), t);
-            Eq(true, h.Last.Contains("scaduto"), "comando di 10 minuti fa: scaduto");
+            Eq("stato", h.Last, "/stato di 10 minuti fa: eseguito lo stesso (legge soltanto)");
+            Eq(true, RemoteController.ExpiresWhenLate("spegni") && RemoteController.ExpiresWhenLate("blocca") &&
+                     RemoteController.ExpiresWhenLate("sblocca"), "blocca, spegni e sblocca scadono");
+            Eq(false, RemoteController.ExpiresWhenLate("screenshot") || RemoteController.ExpiresWhenLate("app") ||
+                      RemoteController.ExpiresWhenLate("chat"), "screenshot, app e chat non scadono");
             c.Process(Msg(42, "/annulla", t.AddMinutes(-10)), t);
             Eq("Nessuno spegnimento in corso.", h.Last, "/annulla vale anche se vecchio");
 
@@ -315,6 +321,13 @@ namespace WinUsage.Tests
             c.Process(Msg(42, "/spegni 10", t3.AddMinutes(2)), t3.AddMinutes(2));
             Eq(10, h.ShutdownMinutes, "spegni 10 minuti");
             Eq(true, h.Last.Contains("sostituisce"), "un nuovo /spegni sostituisce il precedente");
+            Eq(false, h.Last.Contains("bloccato"), "PC sbloccato: nessun avviso sulle app chiuse");
+            h.Locked = true;
+            c.Process(Msg(42, "/spegni 10", t3.AddMinutes(2).AddSeconds(5)), t3.AddMinutes(2).AddSeconds(5));
+            Eq(true, h.Last.Contains(RemoteController.LockedShutdownNote), "PC bloccato: avviso che le app verranno chiuse");
+            h.Locked = false;
+            c.Process(Msg(42, "/spegni 10", t3.AddMinutes(1).AddSeconds(-200)), t3.AddMinutes(2).AddSeconds(10));
+            Eq(true, h.Last.Contains("scaduto"), "/spegni arrivato in ritardo: scaduto");
             h.ShutdownMinutes = -1;
             c.Process(Msg(42, "/spegni 0", t3.AddMinutes(3)), t3.AddMinutes(3));
             c.Process(Msg(42, "/spegni 121", t3.AddMinutes(3)), t3.AddMinutes(3));
@@ -333,6 +346,7 @@ namespace WinUsage.Tests
             Eq(RemoteController.MaxChatLength, h.Chats[1].Length, "messaggi troppo lunghi accorciati");
             c.Process(Msg(42, "/chat", t4), t4);
             Eq(1, h.ChatOpened, "/chat");
+            Eq(true, h.Last.Contains("Ti avviso se la aprono o la rifiutano"), "/chat: il telefono sa che è una richiesta");
             c.Process(Msg(42, "/boh", t4), t4);
             Eq(true, h.Last.StartsWith("Comando sconosciuto"), "comando sconosciuto");
             c.Process(Msg(42, "/aiuto", t4), t4);
@@ -365,7 +379,16 @@ namespace WinUsage.Tests
             Eq(false, cd.Active, "non più attivo dopo la scadenza");
             cd.Start(5, t);
             cd.Tick(t.AddSeconds(1));
-            Eq(CountdownEvent.CancelledBySleep, cd.Tick(t.AddMinutes(30)), "standby durante il conto: annullato, niente spegnimento");
+            Eq(CountdownEvent.None, cd.Tick(t.AddSeconds(120)), "timer fermo 2 minuti (PC bloccato): il conto continua");
+            Eq(true, cd.Active, "ancora attivo dopo l'interruzione");
+            Eq(CountdownEvent.Expired, cd.Tick(t.AddMinutes(30)), "scaduto mentre l'app era ferma: segnalato");
+            Eq(25.0 * 60, cd.LateSeconds(t.AddMinutes(30)), "ritardo rispetto alla scadenza");
+            cd.Start(5, t);
+            Eq(true, cd.CancelForSleep(), "standby vero: annullato");
+            Eq(CountdownEvent.None, cd.Tick(t.AddMinutes(30)), "dopo lo standby niente spegnimento");
+            Eq(2, TelegramApi.NextBackoff(1), "attesa dopo un errore di rete: 1 -> 2 s");
+            Eq(15, TelegramApi.NextBackoff(8), "attesa massima 15 s");
+            Eq(15, TelegramApi.NextBackoff(15), "resta a 15 s");
             cd.Start(500, t);
             Eq(120 * 60, cd.TotalSeconds, "massimo 120 minuti");
 

@@ -80,7 +80,7 @@ connessioni HTTPS in uscita verso `api.telegram.org` (nessuna porta aperta, ness
 | `/stato` | Tempi di utilizzo di oggi e dall'avvio | no |
 | `/app` | Applicazione in primo piano e da quanto, ultimo input, gioco Steam, schermo intero. Mai il titolo della finestra | no |
 | `/screenshot [n] [hd]` | Cattura di tutti i monitor (o del monitor n); `hd` = PNG originale | no |
-| `/chat` | Notifica sul PC con *APRI CHAT* | no |
+| `/chat` | Notifica sul PC con *APRI CHAT* e *CHIUDI*; il telefono sa se la chat viene aperta o rifiutata | no |
 | `/blocca CODICE` | Blocca il PC (Win+L); allo sblocco compare "bloccato dal telefono" | sì |
 | `/spegni CODICE [minuti]` | Spegnimento dopo un conto alla rovescia (5 minuti di default, da 1 a 120) | sì |
 | `/annulla` | Ferma lo spegnimento | mai |
@@ -92,12 +92,17 @@ Quali comandi chiedono il codice si sceglie nella scheda *Comandi*.
 
 **Chat**: dal pulsante *CHAT* del popup o con `/chat` dal telefono. Destinatario fisso (il telefono abbinato),
 nessuna cronologia: i messaggi stanno solo in memoria e spariscono alla chiusura. Un messaggio arrivato a chat
-chiusa compare come notifica con *APRI CHAT*.
+chiusa compare come notifica con *APRI CHAT*. Chi sta al PC e non vuole chattare preme *CHIUDI* (sulla notifica o
+nella finestra della chat, oppure chiude con la X): il telefono riceve "chat rifiutata" o "chat chiusa sul PC".
+Se la richiesta resta senza risposta per 20 secondi, il telefono riceve "nessuno ha aperto la chat".
 
 **Spegnimento**: sul PC compare la bombola d'ossigeno che si svuota con *ANNULLA*, poi un piccolo indicatore fisso
 nell'angolo, poi di nuovo grande nell'ultimo minuto. Si annulla dal PC o con `/annulla`, e l'altro lato viene
-avvisato. Lo spegnimento non è forzato: un documento non salvato lo ferma (e il telefono lo viene a sapere). Se il
-PC va in standby durante il conto alla rovescia, lo spegnimento viene annullato.
+avvisato. Durante il conto alla rovescia il PC non va in standby e lo schermo resta acceso (con lo standby moderno,
+schermo spento vuol dire app congelate). A PC sbloccato lo spegnimento non è forzato: un documento non salvato lo
+ferma (e il telefono lo viene a sapere). **A PC bloccato** non c'è nessuno che possa salvare, quindi alla scadenza le
+app vengono chiuse senza salvare (la risposta a `/spegni` lo avvisa). Se il PC va in standby (pulsante, coperchio)
+durante il conto alla rovescia, lo spegnimento viene annullato.
 
 **Messaggi al telefono**: accensione (cioè l'accesso a Windows; "WinUsage avviato" se l'app parte a mano),
 spegnimento/riavvio/disconnessione con i totali del giorno, chiusura di WinUsage, spegnimento improvviso (corrente,
@@ -114,8 +119,9 @@ nella tray ha un pallino verde.
 **Sicurezza** (analisi completa nel documento di design del progetto):
 - comandi eseguiti solo se Telegram li attribuisce all'account abbinato; ignorati gruppi, messaggi inoltrati,
   modificati, didascalie e messaggi via bot;
-- comandi più vecchi di 2 minuti scartati (Telegram conserva i messaggi a PC spento), confrontando con l'ora del
-  server Telegram e non con l'orologio del PC;
+- `/blocca`, `/spegni` e `/sblocca` più vecchi di 2 minuti scartati (Telegram conserva i messaggi a PC spento),
+  confrontando con l'ora del server Telegram e non con l'orologio del PC; i comandi che leggono soltanto (`/stato`,
+  `/app`, `/screenshot`, `/chat`) si eseguono anche se arrivano in ritardo;
 - codice TOTP monouso, 3 errori = comandi con codice bloccati per 15 minuti; limite di 20 comandi al minuto e di uno
   screenshot ogni 10 secondi;
 - token, utente abbinato, segreto e regole in un unico blocco cifrato con DPAPI: se qualcuno lo modifica nel
@@ -137,7 +143,7 @@ passaggi). Se perdi il telefono: @BotFather → `/revoke`. Se il PC lo usano alt
 
 ## Installare
 
-`dist\WinUsage-Setup-1.3.2.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.4.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -221,12 +227,16 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
   con quelli della build sbagliata (era l'unica differenza).
 - La 1.3.1 su Windows 11 non riusciva a collegarsi a Telegram ("Rete: ReceiveFailure"): dalla 1.3.2 la connessione
   usa TLS 1.2 esplicito invece della scelta di sistema, e gli errori di rete riportano la causa completa (anche nel log).
+- 1.4.0, dopo la prova su Windows 11: lo screenshot copriva solo la parte in alto a sinistra (l'exe compilato con Mono
+  non contiene il manifest, quindi l'app non è DPI-aware e con lo schermo scalato Windows le dava coordinate ridotte);
+  i comandi a volte andavano ripetuti (lettura appesa su connessioni morte, attese fino a 5 minuti dopo un errore di
+  rete, comandi in ritardo scartati); `/spegni` a PC bloccato non funzionava (il timer fermo veniva scambiato per
+  uno standby, ed `ExitWindowsEx` non spegne una sessione bloccata).
 - **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
   notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
   Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio) e,
-  per il controllo remoto, per DPAPI, TLS verso Telegram reale, `LockWorkStation`, `ExitWindowsEx`, cattura dello
-  schermo con DPI diversi tra i monitor (l'app è DPI-aware di sistema: con monitor a scale diverse lo screenshot
-  potrebbe risultare tagliato), finestre di chat e notifiche.
+  per il controllo remoto, le correzioni della 1.4.0 (cattura in pixel fisici, `InitiateShutdown` a PC bloccato,
+  PC tenuto sveglio durante il conto alla rovescia, lettura più robusta) e i pulsanti *CHIUDI* della chat.
   `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura
