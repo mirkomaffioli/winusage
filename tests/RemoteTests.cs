@@ -11,6 +11,11 @@ namespace WinUsage.Tests
     internal sealed class FakeHost : IRemoteHost
     {
         public readonly List<string> Sent = new List<string>();
+        public readonly List<long> SentTo = new List<long>();
+        public readonly List<string> Broadcasts = new List<string>();
+        public readonly List<long> BroadcastExcept = new List<long>();
+        public readonly List<long> ChatFrom = new List<long>();
+        public long LastStepPhone, ChatRequestFrom;
         public readonly List<string> Audits = new List<string>();
         public readonly List<string> Alerts = new List<string>();
         public readonly List<string> Chats = new List<string>();
@@ -23,7 +28,8 @@ namespace WinUsage.Tests
         public string ScreenshotError;
         public ForegroundInfo Foreground = new ForegroundInfo();
 
-        public void SendText(long chatId, string text) { Sent.Add(text); }
+        public void SendText(long chatId, string text) { Sent.Add(text); SentTo.Add(chatId); }
+        public void Broadcast(string text, long exceptId) { Broadcasts.Add(text); BroadcastExcept.Add(exceptId); }
         public void SendScreenshot(long chatId, ScreenshotResult shot) { Screenshots++; }
         public ScreenshotResult CaptureScreenshot(int monitor, bool hd)
         {
@@ -37,20 +43,21 @@ namespace WinUsage.Tests
         public DateTime StartShutdown(int minutes) { ShutdownMinutes = minutes; Shutdown = true; return DateTime.Now.AddMinutes(minutes); }
         public bool CancelShutdown(bool fromRemote) { bool was = Shutdown; Shutdown = false; return was; }
         public bool ShutdownActive { get { return Shutdown; } }
-        public void OpenChat(bool requestedRemotely) { ChatOpened++; }
+        public void OpenChat(bool requestedRemotely, long fromId) { ChatOpened++; ChatRequestFrom = fromId; }
         public bool Locked;
         public bool PcLocked { get { return Locked; } }
-        public void DeliverChat(string text, DateTime sentUtc) { Chats.Add(text); }
+        public void DeliverChat(string text, DateTime sentUtc, long fromId) { Chats.Add(text); ChatFrom.Add(fromId); }
         public void DisableRemote() { Disabled++; }
         public void ConfirmPairing(long userId, string name, Action<bool> done) { done(ConfirmAnswer); }
         public void NotifyLocal(string kind) { Local.Add(kind); }
         public void SecurityAlert(string text) { Alerts.Add(text); }
         public void Audit(long senderId, string command, string result) { Audits.Add(command + " -> " + result); }
         public void SaveSecrets() { SecretsSaved++; }
-        public void SaveTotpStep(long step) { LastStep = step; }
+        public void SaveTotpStep(long phoneId, long step) { LastStep = step; LastStepPhone = phoneId; }
         public string StatusText() { return "stato"; }
 
         public string Last { get { return Sent.Count > 0 ? Sent[Sent.Count - 1] : ""; } }
+        public string LastBroadcast { get { return Broadcasts.Count > 0 ? Broadcasts[Broadcasts.Count - 1] : ""; } }
     }
 
     internal static class RemoteTests
@@ -129,17 +136,42 @@ namespace WinUsage.Tests
             Eq(true, def.RequiresCode("spegni"), "predefinito: spegni con codice");
             Eq(true, def.ExclusionSet().Contains("KeePass"), "esclusioni predefinite");
             def.Token = "123456:ABC=def\nzz";
-            def.UserId = 987654321;
-            def.UserName = "Mirko (@mirko)";
-            def.TotpSecret = Base32.Encode(rfc);
-            def.TotpVerified = true;
+            PairedPhone ph = new PairedPhone();
+            ph.Id = 987654321;
+            ph.Name = "Mirko (@mirko)";
+            ph.TotpSecret = Base32.Encode(rfc);
+            ph.TotpVerified = true;
+            def.Phones.Add(ph);
+            PairedPhone ph2 = new PairedPhone();
+            ph2.Id = 55;
+            ph2.Name = "Anna";
+            def.Phones.Add(ph2);
             def.Save(st);
             Eq(true, st.GetSetting("remote_secure", "").IndexOf("987654321", StringComparison.Ordinal) < 0 &&
                      st.GetSetting("remote_secure", "").IndexOf("ABC", StringComparison.Ordinal) < 0, "nel database token e id non compaiono in chiaro");
             RemoteSecrets back = RemoteSecrets.Load(st, out damaged);
             Eq("123456:ABC=def\nzz", back.Token, "token riletto (anche con = e a capo)");
-            Eq(987654321L, back.UserId, "utente riletto");
-            Eq(true, back.HasTotp, "TOTP riletto");
+            Eq(2, back.Phones.Count, "due telefoni riletti");
+            Eq(987654321L, back.Phones[0].Id, "primo telefono riletto");
+            Eq(true, back.Phones[0].HasTotp && !back.Phones[1].HasTotp, "codice per telefono riletto (solo il primo ce l'ha)");
+            Eq("Anna", back.NameOf(55), "nome del secondo telefono");
+            Eq("Mirko (@mirko), Anna", back.Names(), "elenco dei nomi");
+            RemoteSecrets cl = back.Clone();
+            cl.Phones[0].Name = "cambiato"; cl.Phones.RemoveAt(1);
+            Eq(true, back.Phones.Count == 2 && back.Phones[0].Name == "Mirko (@mirko)", "la copia non tocca l'originale");
+
+            // formato della 1.4: un solo telefono con user_id, user_name, totp, totp_ok
+            System.Text.StringBuilder old = new System.Text.StringBuilder();
+            foreach (string[] kv in new[] { new[] { "token", "1:x" }, new[] { "user_id", "4242" }, new[] { "user_name", "Vecchio" },
+                                             new[] { "totp", Base32.Encode(rfc) }, new[] { "totp_ok", "1" }, new[] { "code_lock", "1" } })
+                old.Append(kv[0]).Append('=').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(kv[1]))).Append('\n');
+            RemoteSecrets legacy = RemoteSecrets.Parse(old.ToString());
+            Eq(1, legacy.Phones.Count, "1.4: il telefono abbinato diventa il primo dell'elenco");
+            Eq(true, legacy.Phones[0].Id == 4242 && legacy.Phones[0].Name == "Vecchio" && legacy.Phones[0].HasTotp,
+               "1.4: id, nome e codice Authenticator passano al telefono");
+            Eq("1:x", legacy.Token, "1.4: token riletto");
+            RemoteSecrets noUser = RemoteSecrets.Parse("token=" + Convert.ToBase64String(Encoding.UTF8.GetBytes("1:x")) + "\n");
+            Eq(false, noUser.Paired, "1.4 senza telefono: nessun telefono");
             string blob = st.GetSetting("remote_secure", "");
             byte[] raw = Convert.FromBase64String(blob);
             raw[raw.Length - 3] ^= 0x01;   // qualcuno cambia un byte (ad esempio l'id utente)
@@ -175,26 +207,75 @@ namespace WinUsage.Tests
             ch.Clear();
             Eq(0, ch.Count, "cronologia cancellata");
 
+            string smile = char.ConvertFromUtf32(0x1F600);                     // 2 caratteri UTF-16
+            string longText = new string('a', 1999) + smile + "fine";           // l'emoji cade a cavallo del 2000
+            Eq(1999, TextCut.Cut(longText, 2000).Length, "taglio a 2000: l'emoji intera resta fuori");
+            Eq(2001, TextCut.Cut(longText, 2001).Length, "taglio a 2001: l'emoji intera resta dentro");
+            Eq("ab", TextCut.Cut("ab", 10), "testo corto invariato");
+            Eq(1999, TextCut.SafeLength(longText, 0, 2000), "pezzo che non spezza l'emoji");
+            Eq(6, TextCut.SafeLength(longText, 1999, 2000), "pezzo successivo: emoji e resto (6 caratteri)");
+            string escaped = Uri.EscapeDataString(longText);
+            Eq(true, escaped.Contains("%F0%9F%98%80") && escaped.EndsWith("fine"), "emoji codificata in UTF-8");
+            Eq(true, escaped == TelegramApi.EscapeLong(longText), "codifica a pezzi con un'emoji sul confine: uguale a quella intera");
+            // accorciare con "…": misura finta (ci stanno 20 caratteri UTF-16), perché sotto Mono misurare richiede uno schermo
+            string row = "";
+            for (int i = 0; i < 30; i++) row += "o" + smile;
+            string fit = ColorText.FitWithEllipsis(row, delegate(string probe) { return probe.Length <= 20; });
+            Eq(true, fit.EndsWith("\u2026") && fit.Length <= 20, "testo lungo accorciato con i puntini");
+            bool lone = false;
+            for (int i = 0; i < fit.Length; i++)
+                if (char.IsHighSurrogate(fit[i]) && (i + 1 >= fit.Length || !char.IsLowSurrogate(fit[i + 1]))) lone = true;
+            Eq(false, lone, "accorciando non resta mezza emoji");
+            Eq(20, fit.Length, "si tiene il massimo che ci sta (6 coppie lettera+emoji, una lettera e i puntini)");
+            Eq("ciao", ColorText.FitWithEllipsis("ciao", delegate(string probe) { return true; }), "testo che ci sta: invariato");
+            string many = "";
+            for (int i = 0; i < 1500; i++) many += smile;                       // 3000 caratteri, solo emoji
+            Eq(true, Uri.EscapeDataString(many) == TelegramApi.EscapeLong(many), "codifica a pezzi di sole emoji");
+
             Console.WriteLine("[R4] Coda in uscita, registro, sessioni");
             RemoteStore store = new RemoteStore(st);
             DateTime now = new DateTime(2026, 11, 21, 20, 0, 0, DateTimeKind.Utc);
-            long o1 = store.AddOutbox("off", "PC spento", now.AddDays(-8));
-            long o2 = store.AddOutbox("on", "PC acceso", now.AddMinutes(-1));
+            long o1 = store.AddOutbox("off", "PC spento", now.AddDays(-8), 42);
+            long o2 = store.AddOutbox("on", "PC acceso", now.AddMinutes(-1), 43);
             List<OutboxItem> ob = store.LoadOutbox(now);
             Eq(1, ob.Count, "messaggi oltre 7 giorni scartati");
             Eq(o2, ob[0].Id, "resta il messaggio recente");
+            Eq(43L, ob[0].ChatId, "la coda sa a quale telefono va il messaggio");
             store.RemoveOutbox(o2);
             Eq(0, store.LoadOutbox(now).Count, "coda vuota dopo l'invio");
             Eq(true, o1 > 0, "id della coda");
             store.AddLog(now, 42, "/spegni 5", "ok");
             Eq("/spegni 5", store.RecentLog(10)[0].Command, "registro dei comandi");
-            store.AddPendingDelete(100, now.AddMinutes(10));
-            store.AddPendingDelete(101, now.AddHours(-50));
+            store.AddPendingDelete(42, 100, now.AddMinutes(10));
+            store.AddPendingDelete(43, 100, now.AddMinutes(10));   // stesso id di messaggio, chat diversa
+            store.AddPendingDelete(42, 101, now.AddHours(-50));
             Eq(0, store.DueDeletes(now).Count, "screenshot da cancellare: non ancora");
-            Eq(1, store.DueDeletes(now.AddMinutes(11)).Count, "screenshot da cancellare dopo 10 minuti (quello oltre 47 ore scartato)");
-            store.Offset = 555; store.TotpLastStep = 777;
+            Eq(2, store.DueDeletes(now.AddMinutes(11)).Count, "due screenshot con lo stesso id in due chat (quello oltre 47 ore scartato)");
+            store.RemovePendingDelete(43, 100);
+            Eq(42L, store.DueDeletes(now.AddMinutes(11))[0].Key, "si toglie solo quello della chat giusta");
+            store.Offset = 555;
+            st.SetSetting("remote_totp_last_step", "500");   // valore della 1.4, senza telefono
+            Eq(500L, store.TotpLastStep(42), "passo TOTP della 1.4 vale per il telefono di allora");
+            store.SetTotpLastStep(42, 777);
             Eq(555L, store.Offset, "offset salvato");
-            Eq(777L, store.TotpLastStep, "ultimo passo TOTP salvato");
+            Eq(777L, store.TotpLastStep(42), "ultimo passo TOTP salvato per telefono");
+            Eq(500L, store.TotpLastStep(43), "un altro telefono non eredita il passo del primo");
+
+            // database della 1.4: tabelle senza chat_id, migrate all'apertura
+            Storage oldDbSt = new Storage(Path.Combine(dir, "remote14.db"));
+            oldDbSt.Execute("CREATE TABLE remote_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT, created_utc TEXT NOT NULL, " +
+                            "kind TEXT NOT NULL, text TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)");
+            oldDbSt.Execute("CREATE TABLE remote_delete(message_id INTEGER PRIMARY KEY, due_utc TEXT NOT NULL)");
+            oldDbSt.Execute("INSERT INTO remote_outbox(created_utc, kind, text) VALUES(?, 'off', 'PC spento')", RemoteStore.Iso(now));
+            oldDbSt.Execute("INSERT INTO remote_delete(message_id, due_utc) VALUES(77, ?)", RemoteStore.Iso(now));
+            RemoteStore migrated = new RemoteStore(oldDbSt);
+            List<OutboxItem> mob = migrated.LoadOutbox(now);
+            Eq(true, mob.Count == 1 && mob[0].ChatId == 0, "1.4: messaggio in coda conservato, per tutti i telefoni (chat 0)");
+            List<KeyValuePair<long, long>> mdel = migrated.DueDeletes(now);
+            Eq(true, mdel.Count == 1 && mdel[0].Key == 0 && mdel[0].Value == 77, "1.4: screenshot da cancellare conservato (chat 0)");
+            migrated.AddPendingDelete(9, 77, now);
+            Eq(2, migrated.DueDeletes(now).Count, "dopo la migrazione la chiave è (chat, messaggio)");
+            oldDbSt.Dispose();
 
             long sA = st.StartSession(now.AddHours(-2));
             st.UpdateSession(sA, now.AddHours(-1), 3600);
@@ -256,7 +337,7 @@ namespace WinUsage.Tests
             FakeHost h = new FakeHost();
             RemoteSecrets sec = new RemoteSecrets();
             RemoteSettings set = new RemoteSettings();
-            RemoteController c = new RemoteController(h, sec, set, 0);
+            RemoteController c = new RemoteController(h, sec, set, delegate(long id) { return 0; });
             DateTime t = new DateTime(2026, 11, 21, 18, 0, 0, DateTimeKind.Utc);
             c.Process(Msg(42, "/stato", t), t);
             Eq(0, h.Sent.Count, "non abbinato: nessuna risposta a nessuno");
@@ -277,7 +358,8 @@ namespace WinUsage.Tests
             code = c.StartPairing(t);
             h.ConfirmAnswer = true;
             c.Process(Msg(42, "/abbina " + code, t), t);
-            Eq(42L, sec.UserId, "abbinato dopo la conferma sul PC");
+            Eq(true, sec.IsPaired(42) && sec.Phones.Count == 1, "abbinato dopo la conferma sul PC");
+            Eq(0, h.Broadcasts.Count, "primo telefono: nessun altro da avvisare (nessun messaggio agli altri)");
             Eq(1, h.SecretsSaved, "configurazione salvata");
 
             Console.WriteLine("[R7] Controller: comandi");
@@ -309,8 +391,8 @@ namespace WinUsage.Tests
 
             c.Process(Msg(42, "/blocca", t), t);
             Eq(true, h.Last.Contains("non è ancora configurato"), "codice non configurato: blocco rifiutato");
-            sec.TotpSecret = Base32.Encode(rfc);
-            sec.TotpVerified = true;
+            sec.Find(42).TotpSecret = Base32.Encode(rfc);
+            sec.Find(42).TotpVerified = true;
             c.Process(Msg(42, "/blocca", t), t);
             Eq(0, h.Locks, "senza codice non blocca");
             Eq(true, h.Last.StartsWith("Serve il codice"), "chiede il codice");
@@ -318,6 +400,7 @@ namespace WinUsage.Tests
             c.Process(Msg(42, "/blocca " + good, t), t);
             Eq(1, h.Locks, "codice giusto: PC bloccato");
             Eq(Totp.StepOf(t), h.LastStep, "passo del codice salvato");
+            Eq(42L, h.LastStepPhone, "passo salvato per il telefono giusto");
             c.Process(Msg(42, "/blocca " + good, t.AddSeconds(5)), t.AddSeconds(5));
             Eq(1, h.Locks, "stesso codice riusato: rifiutato");
             c.Process(Msg(42, "/blocca 000000", t.AddSeconds(6)), t.AddSeconds(6));
@@ -376,6 +459,79 @@ namespace WinUsage.Tests
             DateTime t6 = t5.AddMinutes(2);
             c.Process(Msg(42, "/stop", t6), t6);
             Eq(1, h.Disabled, "/stop disattiva il controllo remoto");
+
+            Console.WriteLine("[R7b] Più telefoni");
+            byte[] key99 = Encoding.ASCII.GetBytes("abcdefghijabcdefghij");
+            DateTime m0 = t6.AddMinutes(30);
+            code = c.StartPairing(m0);
+            c.Process(Msg(99, "/abbina " + code, m0), m0);
+            Eq(true, sec.IsPaired(99) && sec.Phones.Count == 2, "secondo telefono abbinato mentre il primo lo è già");
+            Eq(true, h.LastBroadcast.StartsWith("📱 Nuovo telefono abbinato") && h.BroadcastExcept[h.BroadcastExcept.Count - 1] == 99,
+               "il primo telefono viene avvisato del nuovo abbinamento");
+            c.Process(Msg(99, "/abbina " + code, m0), m0);
+            Eq("Questo telefono è già abbinato.", h.Last, "abbinamento già usato");
+            c.Process(Msg(7, "/stato", m0), m0);
+            Eq(true, h.SentTo[h.SentTo.Count - 1] != 7, "un terzo account non abbinato resta ignorato");
+
+            DateTime m1 = m0.AddMinutes(1);
+            c.Process(Msg(99, "/blocca " + Totp.Code(rfc, Totp.StepOf(m1)), m1), m1);
+            Eq(true, h.Last.Contains("per questo telefono non è ancora"), "il codice del primo telefono non vale per il secondo");
+            sec.Find(99).TotpSecret = Base32.Encode(key99);
+            sec.Find(99).TotpVerified = true;
+            int locks = h.Locks;
+            c.Process(Msg(99, "/blocca " + Totp.Code(rfc, Totp.StepOf(m1)), m1), m1);
+            Eq(locks, h.Locks, "codice dell'altro telefono rifiutato");
+            c.Process(Msg(99, "/blocca " + Totp.Code(key99, Totp.StepOf(m1)), m1.AddSeconds(1)), m1.AddSeconds(1));
+            Eq(locks + 1, h.Locks, "codice del proprio Authenticator accettato");
+            Eq(99L, h.LastStepPhone, "passo salvato per il secondo telefono");
+            Eq(true, h.LastBroadcast.Contains("Anna ha bloccato") || h.LastBroadcast.Contains("ha bloccato il PC"),
+               "gli altri telefoni sanno chi ha bloccato il PC");
+            Eq(99L, h.BroadcastExcept[h.BroadcastExcept.Count - 1], "...ma non chi l'ha fatto");
+            c.Process(Msg(42, "/blocca " + Totp.Code(rfc, Totp.StepOf(m1)), m1.AddSeconds(2)), m1.AddSeconds(2));
+            Eq(locks + 2, h.Locks, "lo stesso passo di tempo è usabile da entrambi (ognuno ha il suo segreto)");
+
+            DateTime m2 = m1.AddMinutes(2);
+            for (int i = 0; i < 3; i++) c.Process(Msg(99, "/blocca 00000" + i, m2.AddSeconds(i)), m2.AddSeconds(i));
+            Eq(true, h.Last.Contains("bloccati per"), "tre errori dal secondo telefono: bloccato");
+            Eq(true, h.Alerts[h.Alerts.Count - 1].Contains("telefono di"), "l'avviso di sicurezza dice quale telefono");
+            c.Process(Msg(42, "/blocca " + Totp.Code(rfc, Totp.StepOf(m2.AddSeconds(31))), m2.AddSeconds(31)), m2.AddSeconds(31));
+            Eq(locks + 3, h.Locks, "il blocco per codici errati di un telefono non ferma l'altro");
+
+            DateTime m3 = m2.AddMinutes(1);
+            c.Process(Msg(42, "/sblocca " + Totp.Code(rfc, Totp.StepOf(m3)), m3), m3);
+            h.ShutdownMinutes = -1;
+            c.Process(Msg(99, "/spegni", m3.AddSeconds(5)), m3.AddSeconds(5));
+            Eq(-1, h.ShutdownMinutes, "la sessione /sblocca del primo telefono non vale per il secondo");
+            c.Process(Msg(42, "/spegni", m3.AddSeconds(6)), m3.AddSeconds(6));
+            Eq(5, h.ShutdownMinutes, "il primo telefono spegne nella sua sessione");
+            Eq(true, h.LastBroadcast.Contains("ha avviato lo spegnimento") && h.BroadcastExcept[h.BroadcastExcept.Count - 1] == 42,
+               "gli altri telefoni sanno dello spegnimento");
+            c.Process(Msg(99, "/annulla", m3.AddSeconds(7)), m3.AddSeconds(7));
+            Eq(true, h.LastBroadcast.StartsWith("Spegnimento annullato da"), "/annulla da un altro telefono: tutti avvisati");
+
+            c.Process(Msg(99, "ciao a tutti", m3.AddSeconds(8)), m3.AddSeconds(8));
+            Eq(99L, h.ChatFrom[h.ChatFrom.Count - 1], "la chat sa chi ha scritto");
+            c.Process(Msg(99, "/chat", m3.AddSeconds(9)), m3.AddSeconds(9));
+            Eq(99L, h.ChatRequestFrom, "la richiesta di chat sa chi la fa");
+            c.Process(Msg(42, "/telefoni", m3.AddSeconds(10)), m3.AddSeconds(10));
+            Eq(true, h.Last.Contains("(questo)") && h.Last.Split('\n').Length == 3, "/telefoni elenca i due telefoni");
+            Eq(true, c.HelpText().Contains("tutti i telefoni"), "l'aiuto dice che la chat la leggono tutti");
+
+            for (long id = 200; sec.Phones.Count < RemoteSecrets.MaxPhones; id++)
+            {
+                code = c.StartPairing(m3);
+                c.Process(Msg(id, "/abbina " + code, m3), m3);
+            }
+            Eq(RemoteSecrets.MaxPhones, sec.Phones.Count, "fino a " + RemoteSecrets.MaxPhones + " telefoni");
+            code = c.StartPairing(m3);
+            c.Process(Msg(300, "/abbina " + code, m3), m3);
+            Eq(true, !sec.IsPaired(300) && h.Last.Contains("già " + RemoteSecrets.MaxPhones + " telefoni"), "oltre il massimo: rifiutato");
+
+            sec.Phones.Remove(sec.Find(99));
+            c.Apply(sec, set);
+            int sentBefore = h.Sent.Count;
+            c.Process(Msg(99, "/stato", m3.AddMinutes(1)), m3.AddMinutes(1));
+            Eq(sentBefore, h.Sent.Count, "telefono rimosso: ignorato");
 
             Console.WriteLine("[R8] App in uso, conto alla rovescia, messaggi");
             ForegroundInfo fi = new ForegroundInfo();

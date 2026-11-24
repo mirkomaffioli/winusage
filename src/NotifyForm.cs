@@ -25,6 +25,9 @@ namespace WinUsage
         public Action OnButton2;             // clic sul secondo pulsante
         public Action OnTimeout;             // la notifica sparisce da sola, senza clic
         public Func<NotifyArt, bool> Update; // a ogni fotogramma; false = chiudi
+        public Func<string, bool> QuickReply;  // non null = barra "rispondi" sopra la notifica; false = non inviato
+        public string ReplyDraft;            // testo scritto nella barra quando la notifica è stata cliccata
+        public string QuickReplyCue = "Rispondi...";   // testo grigio nella barra (es. "Rispondi a tutti...")
     }
 
     /// <summary>
@@ -109,11 +112,12 @@ namespace WinUsage
         private readonly NotifyArt art;
         private readonly Timer timer = new Timer();
         private readonly int scale;
-        private readonly int lifeFrames;
+        private int lifeFrames;
         private readonly Point target;
         private int frame;
         private bool closing;
         private int closeFrame;
+        private QuickReplyBar reply;
 
         public NotifyForm(NotifyRequest r)
         {
@@ -144,6 +148,14 @@ namespace WinUsage
             Location = SlidePosition(0);
 
             MouseClick += OnMouseClick;
+            if (r.QuickReply != null)
+            {
+                reply = new QuickReplyBar(Width, scale, r.QuickReplyCue);
+                reply.SendRequested += r.QuickReply;
+                // chiusura subito dopo, non dentro il gestore del tasto della casella che sta per sparire
+                reply.Sent += delegate { CloseLater(); };
+                reply.CancelRequested += delegate { CloseLater(); };
+            }
             timer.Interval = 100;
             timer.Tick += OnTick;
             timer.Start();
@@ -161,6 +173,8 @@ namespace WinUsage
         private void OnTick(object sender, EventArgs e)
         {
             frame++;
+            // si sta scrivendo nella barra "rispondi": la notifica resta finché non si invia o si chiude
+            if (!closing && reply != null && !reply.IsDisposed && reply.Busy) lifeFrames = Math.Max(lifeFrames, frame + SlideFrames + 20);
             if (!closing && Request.Update != null && !Request.Update(art)) StartClose();
             if (!closing && frame >= lifeFrames - SlideFrames)
             {
@@ -170,7 +184,25 @@ namespace WinUsage
             if (closing && frame - closeFrame >= SlideFrames) { Close(); return; }
             Location = SlidePosition(frame);
             if (frame % 5 == 0) KeepOnTop();
+            PlaceReply();
             Invalidate();
+        }
+
+        /// <summary>La barra "rispondi" compare sopra la notifica quando ha finito di salire e sparisce quando scende.</summary>
+        private void PlaceReply()
+        {
+            if (reply == null || reply.IsDisposed) return;
+            if (closing) { if (reply.Visible) reply.Hide(); return; }
+            if (frame < SlideFrames) return;
+            reply.Location = new Point(Left, Top - reply.Height - 2 * scale);
+            if (!reply.Visible) reply.Show();
+            if (frame % 5 == 0 && !reply.Busy) NativeWindowPos.KeepOnTop(reply.Handle);
+        }
+
+        private void CloseLater()
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            BeginInvoke((Action)delegate { if (!IsDisposed) Close(); });
         }
 
         private void StartClose()
@@ -183,6 +215,7 @@ namespace WinUsage
         private void OnMouseClick(object sender, MouseEventArgs e)
         {
             if (closing) return;
+            if (reply != null && !reply.IsDisposed) Request.ReplyDraft = reply.Draft;
             try
             {
                 if (Hit(art.ButtonRect, e.Location) && Request.OnButton != null) Request.OnButton();
@@ -216,9 +249,8 @@ namespace WinUsage
                 Rectangle r = new Rectangle(a.X * scale + 2, a.Y * scale + 1, a.Width * scale - 4, a.Height * scale - 2);
                 using (Font f = new Font(SystemFonts.MessageBoxFont.FontFamily, 6.5f * scale, GraphicsUnit.Pixel))
                 {
-                    TextRenderer.DrawText(g, art.FreeText, f, r, Color.FromArgb(234, 248, 255),
-                                          TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix |
-                                          TextFormatFlags.Left | TextFormatFlags.Top);
+                    // emoji a colori (DirectWrite) dove possibile
+                    ColorText.Draw(g, art.FreeText, f, r, Color.FromArgb(234, 248, 255), NotifyArt.TextPanel, true);
                 }
             }
         }
@@ -242,6 +274,7 @@ namespace WinUsage
                 timer.Stop();
                 timer.Dispose();
                 art.Dispose();
+                if (reply != null && !reply.IsDisposed) reply.Close();
             }
             base.Dispose(disposing);
         }

@@ -7,7 +7,8 @@ using System.Windows.Forms;
 namespace WinUsage
 {
     /// <summary>
-    /// Chat con il telefono abbinato, e solo con lui: il destinatario non si può cambiare. I messaggi stanno solo in memoria:
+    /// Chat con i telefoni abbinati, e solo con loro: il destinatario non si può cambiare. Con più telefoni è una chat di
+    /// gruppo: quello che si scrive qui arriva a tutti, e i messaggi in arrivo mostrano il nome di chi li ha scritti. I messaggi stanno solo in memoria:
     /// con la cronologia attiva (predefinito) la finestra riparte da quelli già scambiati finché WinUsage resta aperto,
     /// senza cronologia spariscono alla chiusura della finestra. Stile pixel art come le notifiche.
     /// </summary>
@@ -21,15 +22,20 @@ namespace WinUsage
         private readonly TextBox input = new TextBox();
         private readonly PixelButton send = new PixelButton("INVIA");
         private readonly PixelButton close = new PixelButton("CHIUDI");
-        private readonly string userName;
+        private readonly EmojiButton emoji;
+        private string userName;
+        private string groupNames;           // null = un telefono solo
+        private readonly HeaderPanel header;
         private bool showInactive;
 
         /// <summary>Testo da inviare; il gestore restituisce false se non è stato possibile.</summary>
         public event Func<string, bool> SendRequested;
 
-        public RemoteChatForm(string userName, Icon icon, bool keepHistory)
+        /// <param name="groupNames">Nomi dei telefoni se sono più d'uno (chat di gruppo), altrimenti null.</param>
+        public RemoteChatForm(string userName, Icon icon, bool keepHistory, string groupNames)
         {
             this.userName = string.IsNullOrEmpty(userName) ? "telefono" : userName;
+            this.groupNames = groupNames;
             Text = "WinUsage - Chat con il telefono";
             if (icon != null) Icon = icon;
             Font = SystemFonts.MessageBoxFont;
@@ -42,7 +48,7 @@ namespace WinUsage
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             Location = new Point(wa.Right - Width - 24, wa.Bottom - Height - 24);
 
-            Panel header = new HeaderPanel(this.userName);
+            header = new HeaderPanel(this.userName, groupNames != null);
             header.Dock = DockStyle.Top;
             header.Height = 64;
 
@@ -75,9 +81,13 @@ namespace WinUsage
             Panel gapLeft = new Panel();
             gapLeft.Dock = DockStyle.Left;
             gapLeft.Width = 8;
+            emoji = new EmojiButton(input);
+            emoji.Dock = DockStyle.Left;
+            emoji.BackColor = Navy;
             bottom.Controls.Add(input);
             bottom.Controls.Add(gap);
             bottom.Controls.Add(send);
+            bottom.Controls.Add(emoji);
             bottom.Controls.Add(gapLeft);
             bottom.Controls.Add(close);
 
@@ -98,7 +108,9 @@ namespace WinUsage
             Controls.Add(bottom);
             Controls.Add(header);
 
-            AddNote("Chat solo con " + this.userName + ". " + (keepHistory
+            AddNote((groupNames != null
+                        ? "Chat con tutti i telefoni abbinati (" + groupNames + "): quello che scrivi arriva a tutti. "
+                        : "Chat solo con " + this.userName + ". ") + (keepHistory
                 ? "I messaggi restano finché WinUsage è aperto (solo in memoria): spariscono al riavvio."
                 : "Nessuna cronologia: i messaggi spariscono alla chiusura."));
             Shown += delegate { input.Focus(); };
@@ -121,9 +133,27 @@ namespace WinUsage
 
         protected override bool ShowWithoutActivation { get { return showInactive; } }
 
-        public void AddIncoming(string text, DateTime sentUtc)
+        /// <summary>Testo già scritto altrove (barra "rispondi" della notifica), da continuare qui.</summary>
+        public void SetDraft(string text)
         {
-            AddBubble(new ChatBubble(text, false, sentUtc.ToLocalTime()));
+            if (string.IsNullOrEmpty(text) || input.TextLength > 0) return;
+            input.Text = text;
+            input.SelectionStart = input.TextLength;
+        }
+
+        /// <param name="sender">Nome del telefono, mostrato sopra il messaggio (null con un telefono solo).</param>
+        public void AddIncoming(string text, DateTime sentUtc, string sender)
+        {
+            AddBubble(new ChatBubble(text, false, sentUtc.ToLocalTime(), sender));
+        }
+
+        /// <summary>I telefoni abbinati sono cambiati mentre la chat è aperta.</summary>
+        public void SetPhones(string userName, string groupNames)
+        {
+            this.userName = string.IsNullOrEmpty(userName) ? "telefono" : userName;
+            this.groupNames = groupNames;
+            header.SetUser(this.userName, groupNames != null);
+            AddNote(groupNames != null ? "Telefoni nella chat: " + groupNames + "." : "Ora la chat è solo con " + this.userName + ".");
         }
 
         /// <summary>Messaggi già scambiati (cronologia), dal più vecchio.</summary>
@@ -134,7 +164,7 @@ namespace WinUsage
             ChatBubble last = null;
             foreach (ChatEntry e in entries)
             {
-                last = new ChatBubble(e.Text, e.Outgoing, e.Utc.ToLocalTime());
+                last = new ChatBubble(e.Text, e.Outgoing, e.Utc.ToLocalTime(), groupNames != null ? e.Sender : null);
                 list.Controls.Add(last);
             }
             list.ResumeLayout();
@@ -154,7 +184,7 @@ namespace WinUsage
             bool ok = h != null && h(text);
             if (ok)
             {
-                AddBubble(new ChatBubble(text, true, DateTime.Now));
+                AddBubble(new ChatBubble(text, true, DateTime.Now, null));
                 input.Clear();
             }
             else AddNote("Messaggio non inviato: controllo remoto non attivo.");
@@ -199,15 +229,25 @@ namespace WinUsage
         /// <summary>Intestazione disegnata in pixel art: fondale, conchiglia e titolo nel font 5x7.</summary>
         private sealed class HeaderPanel : Panel
         {
-            private readonly string user;
+            private string user;
+            private bool group;
             private Bitmap sea;
             private readonly Bitmap shell = PixelArt.ToBitmap(RemoteSprites.Shell);
 
-            public HeaderPanel(string user)
+            public HeaderPanel(string user, bool group)
             {
                 this.user = user;
+                this.group = group;
                 DoubleBuffered = true;
                 ResizeRedraw = true;
+            }
+
+            public void SetUser(string name, bool group)
+            {
+                user = name;
+                this.group = group;
+                if (sea != null) { sea.Dispose(); sea = null; }   // ridisegna il fondale con il nuovo nome
+                Invalidate();
             }
 
             protected override void OnPaint(PaintEventArgs e)
@@ -223,8 +263,9 @@ namespace WinUsage
                         g.InterpolationMode = InterpolationMode.NearestNeighbor;
                         g.PixelOffsetMode = PixelOffsetMode.Half;
                         g.DrawImage(shell, new Rectangle(6, 7, 16, 16), 0, 0, 16, 16, GraphicsUnit.Pixel);
-                        PixelFont.DrawShadow(g, "CHAT CON IL TELEFONO", 28, 7, Color.FromArgb(255, 214, 90), Color.FromArgb(138, 90, 26), 1);
-                        PixelFont.DrawShadow(g, NotifyArt.Fit(PixelFont.CanDraw(user) ? user : "TELEFONO ABBINATO", lw - 34), 28, 17,
+                        PixelFont.DrawShadow(g, group ? "CHAT CON I TELEFONI" : "CHAT CON IL TELEFONO", 28, 7, Color.FromArgb(255, 214, 90), Color.FromArgb(138, 90, 26), 1);
+                        string shown = user.ToUpperInvariant();
+                        PixelFont.DrawShadow(g, NotifyArt.Fit(PixelFont.CanDraw(shown) ? shown : "TELEFONO ABBINATO", lw - 34), 28, 17,
                                              Color.FromArgb(190, 235, 255), Color.FromArgb(8, 24, 52), 1);
                     }
                 }
@@ -244,12 +285,15 @@ namespace WinUsage
         {
             private readonly bool outgoing;
             private readonly string time;
+            private readonly string sender;     // nome sopra il testo (chat di gruppo), o null
             private const int Pad = 8;
+            private const int SenderHeight = 15;
 
-            public ChatBubble(string text, bool outgoing, DateTime local)
+            public ChatBubble(string text, bool outgoing, DateTime local, string sender)
             {
                 Text = text;
                 this.outgoing = outgoing;
+                this.sender = string.IsNullOrEmpty(sender) ? null : sender;
                 // messaggi di un altro giorno (cronologia): anche la data
                 time = local.ToString(local.Date == DateTime.Today ? "HH:mm" : "dd/MM HH:mm", CultureInfo.InvariantCulture);
                 DoubleBuffered = true;
@@ -259,11 +303,27 @@ namespace WinUsage
             public void FitTo(int width)
             {
                 int maxText = (int)(width * 0.78) - 2 * Pad;
-                Size sz = TextRenderer.MeasureText(Text, Font, new Size(maxText, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
-                int w = Math.Max(sz.Width, 40) + 2 * Pad;
-                int h = sz.Height + 2 * Pad + 12;
+                Size sz = ColorText.Measure(Text, Font, maxText);
+                int top = sender != null ? SenderHeight : 0;
+                int nameWidth = sender != null ? Math.Min(maxText, TextRenderer.MeasureText(sender, SenderFont()).Width) : 0;
+                int w = Math.Max(Math.Max(sz.Width, nameWidth), 40) + 2 * Pad;
+                int h = sz.Height + 2 * Pad + 12 + top;
                 Size = new Size(w, h);
                 Margin = new Padding(outgoing ? width - w : 0, 0, 0, 8);
+            }
+
+            private Font senderFont;
+
+            private Font SenderFont()
+            {
+                if (senderFont == null) senderFont = new Font(Font.FontFamily, Font.Size * 0.85f, FontStyle.Bold);
+                return senderFont;
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && senderFont != null) senderFont.Dispose();
+                base.Dispose(disposing);
             }
 
             protected override void OnPaint(PaintEventArgs e)
@@ -284,8 +344,15 @@ namespace WinUsage
                     g.FillRectangle(f, 2 * px, px / 2 + 1, w - 4 * px, h - px - 2);
                     g.FillRectangle(l, 2 * px, px, w - 4 * px, px / 2 + 1);
                 }
-                Rectangle tr = new Rectangle(Pad, Pad, Width - 2 * Pad, Height - 2 * Pad - 12);
-                TextRenderer.DrawText(g, Text, Font, tr, text, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                int top = 0;
+                if (sender != null)
+                {
+                    top = SenderHeight;
+                    TextRenderer.DrawText(g, sender, SenderFont(), new Rectangle(Pad, Pad - 2, Width - 2 * Pad, SenderHeight),
+                                          Color.FromArgb(10, 70, 80), TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                }
+                Rectangle tr = new Rectangle(Pad, Pad + top, Width - 2 * Pad, Height - 2 * Pad - 12 - top);
+                ColorText.Draw(g, Text, Font, tr, text, fill, false);   // emoji a colori dove possibile
                 using (Font small = new Font(Font.FontFamily, Font.Size * 0.8f))
                     TextRenderer.DrawText(g, time, small, new Rectangle(Pad, Height - Pad - 13, Width - 2 * Pad, 13),
                                           Color.FromArgb(60, 70, 90), TextFormatFlags.Right | TextFormatFlags.NoPrefix);

@@ -130,17 +130,45 @@ namespace WinUsage
         }
     }
 
+    /// <summary>Un telefono abbinato: account Telegram e segreto del suo Authenticator (ogni telefono ha il suo).</summary>
+    internal sealed class PairedPhone
+    {
+        public long Id;                      // id dell'account Telegram (= chat privata con il bot)
+        public string Name = "";
+        public string TotpSecret = "";       // base32; vuoto = codice non configurato per questo telefono
+        public bool TotpVerified;
+
+        public bool HasTotp { get { return TotpVerified && SecretBytes() != null; } }
+
+        public byte[] SecretBytes()
+        {
+            byte[] b = Base32.Decode(TotpSecret);
+            return b != null && b.Length >= 10 ? b : null;
+        }
+
+        public PairedPhone Clone()
+        {
+            return (PairedPhone)MemberwiseClone();
+        }
+
+        /// <summary>Nome da mostrare (quello di Telegram, o l'id se manca).</summary>
+        public string Label
+        {
+            get { return string.IsNullOrEmpty(Name) || Name == "?" ? "telefono " + Id.ToString(CultureInfo.InvariantCulture) : Name; }
+        }
+    }
+
     /// <summary>
     /// Valori di sicurezza del controllo remoto, salvati in un unico blob cifrato con DPAPI (utente corrente).
-    /// Chi modifica il database non può cambiare l'utente abbinato: un blob alterato non si decifra.
+    /// Chi modifica il database non può cambiare i telefoni abbinati: un blob alterato non si decifra.
+    /// Dalla 1.5 più telefoni, ognuno con il suo codice Authenticator; il formato della 1.4 (un telefono) si legge ancora.
     /// </summary>
     internal sealed class RemoteSecrets
     {
+        public const int MaxPhones = 5;
+
         public string Token = "";
-        public long UserId;                  // 0 = nessun telefono abbinato
-        public string UserName = "";
-        public string TotpSecret = "";       // base32; vuoto = non configurato
-        public bool TotpVerified;
+        public List<PairedPhone> Phones = new List<PairedPhone>();
         public bool CodeScreenshot;          // protezione dei comandi (decisioni di design: screenshot e app senza codice)
         public bool CodeApp;
         public bool CodeLock = true;
@@ -161,19 +189,38 @@ namespace WinUsage
             return ProtectedData.Unprotect(cipher, Entropy, DataProtectionScope.CurrentUser);
         };
 
-        public bool Paired { get { return UserId != 0; } }
+        public bool Paired { get { return Phones.Count > 0; } }
         public bool HasToken { get { return !string.IsNullOrEmpty(Token); } }
-        public bool HasTotp { get { return TotpVerified && SecretBytes() != null; } }
+        public bool CanAddPhone { get { return Phones.Count < MaxPhones; } }
 
-        public byte[] SecretBytes()
+        public PairedPhone Find(long id)
         {
-            byte[] b = Base32.Decode(TotpSecret);
-            return b != null && b.Length >= 10 ? b : null;
+            foreach (PairedPhone p in Phones) if (p.Id == id) return p;
+            return null;
+        }
+
+        public bool IsPaired(long id) { return id != 0 && Find(id) != null; }
+
+        public string NameOf(long id)
+        {
+            PairedPhone p = Find(id);
+            return p != null ? p.Label : id.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>Nomi dei telefoni separati da virgola ("Mirko, Anna").</summary>
+        public string Names()
+        {
+            List<string> n = new List<string>();
+            foreach (PairedPhone p in Phones) n.Add(p.Label);
+            return string.Join(", ", n.ToArray());
         }
 
         public RemoteSecrets Clone()
         {
-            return (RemoteSecrets)MemberwiseClone();
+            RemoteSecrets c = (RemoteSecrets)MemberwiseClone();
+            c.Phones = new List<PairedPhone>();
+            foreach (PairedPhone p in Phones) c.Phones.Add(p.Clone());
+            return c;
         }
 
         public bool RequiresCode(string command)
@@ -204,10 +251,15 @@ namespace WinUsage
         {
             StringBuilder sb = new StringBuilder();
             Line(sb, "token", Token);
-            Line(sb, "user_id", UserId.ToString(CultureInfo.InvariantCulture));
-            Line(sb, "user_name", UserName);
-            Line(sb, "totp", TotpSecret);
-            Line(sb, "totp_ok", TotpVerified ? "1" : "0");
+            Line(sb, "phones", Phones.Count.ToString(CultureInfo.InvariantCulture));
+            for (int i = 0; i < Phones.Count; i++)
+            {
+                string k = "phone" + i.ToString(CultureInfo.InvariantCulture) + "_";
+                Line(sb, k + "id", Phones[i].Id.ToString(CultureInfo.InvariantCulture));
+                Line(sb, k + "name", Phones[i].Name);
+                Line(sb, k + "totp", Phones[i].TotpSecret);
+                Line(sb, k + "totp_ok", Phones[i].TotpVerified ? "1" : "0");
+            }
             Line(sb, "code_screenshot", CodeScreenshot ? "1" : "0");
             Line(sb, "code_app", CodeApp ? "1" : "0");
             Line(sb, "code_lock", CodeLock ? "1" : "0");
@@ -224,19 +276,54 @@ namespace WinUsage
         public static RemoteSecrets Parse(string text)
         {
             RemoteSecrets s = new RemoteSecrets();
+            Dictionary<string, string> kv = new Dictionary<string, string>();
             foreach (string line in text.Split('\n'))
             {
                 int eq = line.IndexOf('=');
                 if (eq <= 0) continue;
-                string key = line.Substring(0, eq);
-                string v = Encoding.UTF8.GetString(Convert.FromBase64String(line.Substring(eq + 1)));
+                kv[line.Substring(0, eq)] = Encoding.UTF8.GetString(Convert.FromBase64String(line.Substring(eq + 1)));
+            }
+
+            string count;
+            if (kv.TryGetValue("phones", out count))
+            {
+                int n;
+                int.TryParse(count, NumberStyles.Integer, CultureInfo.InvariantCulture, out n);
+                for (int i = 0; i < n && i < MaxPhones; i++)
+                {
+                    string k = "phone" + i.ToString(CultureInfo.InvariantCulture) + "_";
+                    PairedPhone p = new PairedPhone();
+                    string v;
+                    if (kv.TryGetValue(k + "id", out v)) long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out p.Id);
+                    if (kv.TryGetValue(k + "name", out v)) p.Name = v;
+                    if (kv.TryGetValue(k + "totp", out v)) p.TotpSecret = v;
+                    if (kv.TryGetValue(k + "totp_ok", out v)) p.TotpVerified = v == "1";
+                    if (p.Id != 0 && s.Find(p.Id) == null) s.Phones.Add(p);
+                }
+            }
+            else
+            {
+                // formato della 1.4: un solo telefono, con il codice Authenticator unico che diventa il suo
+                long id = 0;
+                string v;
+                if (kv.TryGetValue("user_id", out v)) long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out id);
+                if (id != 0)
+                {
+                    PairedPhone p = new PairedPhone();
+                    p.Id = id;
+                    if (kv.TryGetValue("user_name", out v)) p.Name = v;
+                    if (kv.TryGetValue("totp", out v)) p.TotpSecret = v;
+                    if (kv.TryGetValue("totp_ok", out v)) p.TotpVerified = v == "1";
+                    s.Phones.Add(p);
+                }
+            }
+
+            foreach (KeyValuePair<string, string> e in kv)
+            {
+                string key = e.Key, v = e.Value;
                 switch (key)
                 {
                     case "token": s.Token = v; break;
-                    case "user_id": long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out s.UserId); break;
-                    case "user_name": s.UserName = v; break;
-                    case "totp": s.TotpSecret = v; break;
-                    case "totp_ok": s.TotpVerified = v == "1"; break;
                     case "code_screenshot": s.CodeScreenshot = v == "1"; break;
                     case "code_app": s.CodeApp = v == "1"; break;
                     case "code_lock": s.CodeLock = v == "1"; break;
@@ -375,6 +462,7 @@ namespace WinUsage
         public DateTime CreatedUtc;
         public string Kind;
         public string Text;
+        public long ChatId;                  // 0 = riga della 1.4, per tutti i telefoni
     }
 
     internal sealed class RemoteLogEntry
@@ -400,15 +488,42 @@ namespace WinUsage
                 st.Execute("CREATE TABLE IF NOT EXISTS remote_log(id INTEGER PRIMARY KEY AUTOINCREMENT, ts_utc TEXT NOT NULL, " +
                            "sender_id INTEGER NOT NULL, command TEXT NOT NULL, result TEXT NOT NULL)");
                 st.Execute("CREATE TABLE IF NOT EXISTS remote_delete(message_id INTEGER PRIMARY KEY, due_utc TEXT NOT NULL)");
+                MigrateChatColumns();
             }
             catch (Exception ex) { Log.Write(ex); }
         }
 
-        public long AddOutbox(string kind, string text, DateTime utc)
+        /// <summary>
+        /// Dalla 1.5 coda e screenshot da cancellare sanno a quale chat (telefono) appartengono. Le righe della 1.4 hanno
+        /// chat_id 0 = "il telefono di allora": il servizio le assegna (coda: a tutti i telefoni; screenshot: al primo).
+        /// remote_delete si ricrea perché la chiave diventa (chat_id, message_id): gli id dei messaggi sono per chat.
+        /// </summary>
+        private void MigrateChatColumns()
+        {
+            if (!HasColumn("remote_outbox", "chat_id"))
+                st.Execute("ALTER TABLE remote_outbox ADD COLUMN chat_id INTEGER NOT NULL DEFAULT 0");
+            if (!HasColumn("remote_delete", "chat_id"))
+            {
+                st.Execute("CREATE TABLE IF NOT EXISTS remote_delete2(chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, " +
+                           "due_utc TEXT NOT NULL, PRIMARY KEY(chat_id, message_id))");
+                st.Execute("INSERT OR IGNORE INTO remote_delete2(chat_id, message_id, due_utc) SELECT 0, message_id, due_utc FROM remote_delete");
+                st.Execute("DROP TABLE remote_delete");
+                st.Execute("ALTER TABLE remote_delete2 RENAME TO remote_delete");
+            }
+        }
+
+        private bool HasColumn(string table, string column)
+        {
+            foreach (object[] row in st.Query("PRAGMA table_info(" + table + ")"))
+                if (row.Length > 1 && string.Equals(row[1] as string, column, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        public long AddOutbox(string kind, string text, DateTime utc, long chatId)
         {
             try
             {
-                st.Execute("INSERT INTO remote_outbox(created_utc, kind, text) VALUES(?, ?, ?)", Iso(utc), kind, text);
+                st.Execute("INSERT INTO remote_outbox(created_utc, kind, text, chat_id) VALUES(?, ?, ?, ?)", Iso(utc), kind, text, chatId);
                 List<object[]> r = st.Query("SELECT last_insert_rowid()");
                 return r.Count > 0 ? (long)r[0][0] : -1;
             }
@@ -427,13 +542,14 @@ namespace WinUsage
             try
             {
                 st.Execute("DELETE FROM remote_outbox WHERE created_utc < ?", Iso(nowUtc.AddDays(-7)));
-                foreach (object[] row in st.Query("SELECT id, created_utc, kind, text FROM remote_outbox ORDER BY id"))
+                foreach (object[] row in st.Query("SELECT id, created_utc, kind, text, chat_id FROM remote_outbox ORDER BY id"))
                 {
                     OutboxItem it = new OutboxItem();
                     it.Id = (long)row[0];
                     it.CreatedUtc = ParseIso((string)row[1]);
                     it.Kind = (string)row[2];
                     it.Text = (string)row[3];
+                    it.ChatId = (long)row[4];
                     list.Add(it);
                 }
             }
@@ -470,29 +586,33 @@ namespace WinUsage
             return list;
         }
 
-        public void AddPendingDelete(long messageId, DateTime dueUtc)
+        public void AddPendingDelete(long chatId, long messageId, DateTime dueUtc)
         {
-            try { st.Execute("INSERT OR REPLACE INTO remote_delete(message_id, due_utc) VALUES(?, ?)", messageId, Iso(dueUtc)); }
+            try
+            {
+                st.Execute("INSERT OR REPLACE INTO remote_delete(chat_id, message_id, due_utc) VALUES(?, ?, ?)", chatId, messageId, Iso(dueUtc));
+            }
             catch (Exception ex) { Log.Write(ex); }
         }
 
-        /// <summary>Screenshot da cancellare ora. Oltre le 47 ore Telegram non lo permette più: si lasciano perdere.</summary>
-        public List<long> DueDeletes(DateTime nowUtc)
+        /// <summary>Screenshot da cancellare ora (chat, messaggio). Oltre le 47 ore Telegram non lo permette più: si lasciano perdere.</summary>
+        public List<KeyValuePair<long, long>> DueDeletes(DateTime nowUtc)
         {
-            List<long> ids = new List<long>();
+            List<KeyValuePair<long, long>> ids = new List<KeyValuePair<long, long>>();
             try
             {
                 st.Execute("DELETE FROM remote_delete WHERE due_utc < ?", Iso(nowUtc.AddHours(-47)));
-                foreach (object[] row in st.Query("SELECT message_id FROM remote_delete WHERE due_utc <= ?", Iso(nowUtc)))
-                    ids.Add((long)row[0]);
+                foreach (object[] row in st.Query("SELECT chat_id, message_id FROM remote_delete WHERE due_utc <= ?", Iso(nowUtc)))
+                    ids.Add(new KeyValuePair<long, long>((long)row[0], (long)row[1]));
             }
             catch (Exception ex) { Log.Write(ex); }
             return ids;
         }
 
-        public void RemovePendingDelete(long messageId)
+        public void RemovePendingDelete(long chatId, long messageId)
         {
-            try { st.Execute("DELETE FROM remote_delete WHERE message_id=?", messageId); } catch (Exception ex) { Log.Write(ex); }
+            try { st.Execute("DELETE FROM remote_delete WHERE chat_id=? AND message_id=?", chatId, messageId); }
+            catch (Exception ex) { Log.Write(ex); }
         }
 
         public long Offset
@@ -501,10 +621,19 @@ namespace WinUsage
             set { st.SetSetting("remote_offset", value.ToString(CultureInfo.InvariantCulture)); }
         }
 
-        public long TotpLastStep
+        /// <summary>
+        /// Ultimo passo TOTP accettato per un telefono (un codice non si riusa). Il valore della 1.4 (unico, senza telefono)
+        /// vale per il telefono di allora finché quel telefono non ne salva uno suo.
+        /// </summary>
+        public long TotpLastStep(long phoneId)
         {
-            get { return GetLong("remote_totp_last_step"); }
-            set { st.SetSetting("remote_totp_last_step", value.ToString(CultureInfo.InvariantCulture)); }
+            long own = GetLong("remote_totp_last_step_" + phoneId.ToString(CultureInfo.InvariantCulture));
+            return Math.Max(own, GetLong("remote_totp_last_step"));
+        }
+
+        public void SetTotpLastStep(long phoneId, long step)
+        {
+            st.SetSetting("remote_totp_last_step_" + phoneId.ToString(CultureInfo.InvariantCulture), step.ToString(CultureInfo.InvariantCulture));
         }
 
         private long GetLong(string key)
@@ -530,18 +659,42 @@ namespace WinUsage
 
     internal enum CountdownEvent { None, Expired }
 
+    /// <summary>Tagli di testo che non spezzano le emoji (coppie surrogate UTF-16).</summary>
+    internal static class TextCut
+    {
+        /// <summary>Quanti caratteri prendere da <paramref name="start"/>, al massimo <paramref name="max"/>, senza dividere una coppia surrogata.</summary>
+        public static int SafeLength(string s, int start, int max)
+        {
+            int len = Math.Min(max, s.Length - start);
+            if (len > 1 && start + len < s.Length && char.IsHighSurrogate(s[start + len - 1]) && char.IsLowSurrogate(s[start + len]))
+                len--;
+            return len;
+        }
+
+        /// <summary>Al massimo <paramref name="max"/> caratteri, senza lasciare mezza emoji in fondo.</summary>
+        public static string Cut(string s, int max)
+        {
+            if (s == null || s.Length <= max) return s;
+            return s.Substring(0, SafeLength(s, 0, max));
+        }
+    }
+
     /// <summary>Un messaggio della chat: testo, direzione e ora (UTC).</summary>
     internal sealed class ChatEntry
     {
         public readonly string Text;
         public readonly bool Outgoing;     // true = scritto sul PC
         public readonly DateTime Utc;
+        public readonly string Sender;     // nome del telefono che l'ha scritto (null per i messaggi del PC)
 
-        public ChatEntry(string text, bool outgoing, DateTime utc)
+        public ChatEntry(string text, bool outgoing, DateTime utc) : this(text, outgoing, utc, null) { }
+
+        public ChatEntry(string text, bool outgoing, DateTime utc, string sender)
         {
             Text = text;
             Outgoing = outgoing;
             Utc = utc;
+            Sender = sender;
         }
     }
 
@@ -559,7 +712,12 @@ namespace WinUsage
 
         public void Add(string text, bool outgoing, DateTime utc)
         {
-            entries.Add(new ChatEntry(text, outgoing, utc));
+            Add(text, outgoing, utc, null);
+        }
+
+        public void Add(string text, bool outgoing, DateTime utc, string sender)
+        {
+            entries.Add(new ChatEntry(text, outgoing, utc, sender));
             if (entries.Count > Max) entries.RemoveRange(0, entries.Count - Max);
         }
 
@@ -680,15 +838,16 @@ namespace WinUsage
         bool CancelShutdown(bool fromRemote);
         bool ShutdownActive { get; }
         bool PcLocked { get; }                         // schermo bloccato (nessuno può salvare i documenti)
-        void OpenChat(bool requestedRemotely);
-        void DeliverChat(string text, DateTime sentUtc);
+        void Broadcast(string text, long exceptId);    // a tutti i telefoni abbinati tranne exceptId (0 = a tutti)
+        void OpenChat(bool requestedRemotely, long fromId);
+        void DeliverChat(string text, DateTime sentUtc, long fromId);
         void DisableRemote();
         void ConfirmPairing(long userId, string name, Action<bool> done);
         void NotifyLocal(string kind);                 // "screenshot", "app"
         void SecurityAlert(string text);
         void Audit(long senderId, string command, string result);
         void SaveSecrets();
-        void SaveTotpStep(long step);
+        void SaveTotpStep(long phoneId, long step);
         string StatusText();
     }
 
@@ -718,27 +877,51 @@ namespace WinUsage
         private int pairingAttempts;
         private bool pairingConfirmPending;
 
-        private DateTime sessionUntilUtc = DateTime.MinValue;
-        private int codeFailures;
-        private DateTime lockoutUntilUtc = DateTime.MinValue;
-        private long totpLastStep;
+        /// <summary>Stato dei codici di un telefono: ognuno ha il suo segreto, la sua sessione /sblocca e il suo blocco.</summary>
+        private sealed class CodeState
+        {
+            public DateTime SessionUntilUtc = DateTime.MinValue;
+            public int Failures;
+            public DateTime LockoutUntilUtc = DateTime.MinValue;
+            public long LastStep;
+        }
+
+        private readonly Dictionary<long, CodeState> codeStates = new Dictionary<long, CodeState>();
+        private readonly Func<long, long> loadStep;
         private DateTime lastScreenshotUtc = DateTime.MinValue;
         private DateTime lastAppUtc = DateTime.MinValue;
         private readonly Queue<DateTime> recentCommands = new Queue<DateTime>();
         private DateTime floodNoticeUtc = DateTime.MinValue;
 
-        public RemoteController(IRemoteHost host, RemoteSecrets secrets, RemoteSettings settings, long totpLastStep)
+        /// <param name="loadStep">Ultimo passo TOTP salvato per un telefono (per non accettare due volte lo stesso codice).</param>
+        public RemoteController(IRemoteHost host, RemoteSecrets secrets, RemoteSettings settings, Func<long, long> loadStep)
         {
             this.host = host;
             this.secrets = secrets;
             this.settings = settings;
-            this.totpLastStep = totpLastStep;
+            this.loadStep = loadStep;
         }
 
         public void Apply(RemoteSecrets newSecrets, RemoteSettings newSettings)
         {
             secrets = newSecrets;
             settings = newSettings;
+            // telefoni tolti: via anche il loro stato (un telefono riabbinato riparte da capo)
+            List<long> gone = new List<long>();
+            foreach (long id in codeStates.Keys) if (!secrets.IsPaired(id)) gone.Add(id);
+            foreach (long id in gone) codeStates.Remove(id);
+        }
+
+        private CodeState State(long phoneId)
+        {
+            CodeState st;
+            if (!codeStates.TryGetValue(phoneId, out st))
+            {
+                st = new CodeState();
+                st.LastStep = loadStep != null ? loadStep(phoneId) : 0;
+                codeStates[phoneId] = st;
+            }
+            return st;
         }
 
         public RemoteSecrets Secrets { get { return secrets; } }
@@ -795,7 +978,7 @@ namespace WinUsage
             string reject = Reject(m);
             if (reject != null)
             {
-                if (m != null && secrets.Paired && m.FromId == secrets.UserId)
+                if (m != null && secrets.IsPaired(m.FromId))
                     host.Audit(m.FromId, "(messaggio ignorato)", reject);
                 return;
             }
@@ -805,22 +988,19 @@ namespace WinUsage
             string[] args;
             ParseCommand(text, out cmd, out args);
 
-            if (!secrets.Paired)
+            if (!secrets.IsPaired(m.FromId))
             {
+                // Un telefono nuovo (il primo o uno in più) si abbina solo con il codice mostrato sul PC. Agli altri non si
+                // risponde mai: il bot non si fa riconoscere.
                 if (cmd == "abbina" && PairingOpen(serverNowUtc) && !pairingConfirmPending) HandlePairing(m, args, serverNowUtc);
-                return;   // nessuna risposta: il bot non si fa riconoscere
-            }
-
-            if (m.FromId != secrets.UserId)
-            {
-                host.Audit(m.FromId, cmd != null ? "/" + cmd : "(testo)", "mittente non autorizzato, ignorato");
+                else if (secrets.Paired) host.Audit(m.FromId, cmd != null ? "/" + cmd : "(testo)", "mittente non autorizzato, ignorato");
                 return;
             }
 
             if (cmd == null)
             {
-                string t = text.Length > MaxChatLength ? text.Substring(0, MaxChatLength) : text;
-                host.DeliverChat(t, m.DateUtc);
+                string t = TextCut.Cut(text, MaxChatLength);
+                host.DeliverChat(t, m.DateUtc, m.FromId);
                 return;
             }
 
@@ -864,22 +1044,35 @@ namespace WinUsage
             string given = args.Length > 0 ? args[0].ToUpperInvariant() : "";
             if (given == pairingCode)
             {
-                pairingConfirmPending = true;
                 long userId = m.FromId;
                 long chatId = m.ChatId;
+                if (!secrets.CanAddPhone)
+                {
+                    pairingCode = null;
+                    host.SendText(chatId, "Ci sono già " + RemoteSecrets.MaxPhones + " telefoni abbinati: rimuovine uno dal PC e riprova.");
+                    host.Audit(userId, "/abbina", "troppi telefoni");
+                    return;
+                }
+                pairingConfirmPending = true;
                 string name = string.IsNullOrEmpty(m.FromName) ? "?" : m.FromName;
                 host.SendText(chatId, "Codice corretto. Conferma l'abbinamento sul PC.");
                 host.ConfirmPairing(userId, name, delegate(bool ok)
                 {
                     pairingConfirmPending = false;
                     pairingCode = null;
-                    if (ok)
+                    if (ok && secrets.Find(userId) == null && secrets.CanAddPhone)
                     {
-                        secrets.UserId = userId;
-                        secrets.UserName = name;
+                        PairedPhone phone = new PairedPhone();
+                        phone.Id = userId;
+                        phone.Name = name;
+                        secrets.Phones.Add(phone);
+                        codeStates.Remove(userId);
                         host.SaveSecrets();
                         host.Audit(userId, "/abbina", "abbinato");
                         host.SendText(chatId, "✅ Telefono abbinato a " + Environment.MachineName + ".\n\n" + HelpText());
+                        // gli altri telefoni lo sanno: un abbinamento che nessuno aspettava salta all'occhio
+                        if (secrets.Phones.Count > 1)
+                            host.Broadcast("📱 Nuovo telefono abbinato a " + Environment.MachineName + ": " + phone.Label + ".", userId);
                     }
                     else
                     {
@@ -948,24 +1141,26 @@ namespace WinUsage
 
             if (!secrets.RequiresCode(cmd)) return true;
 
-            if (!secrets.HasTotp)
+            PairedPhone phone = secrets.Find(m.FromId);
+            CodeState st = State(m.FromId);
+            if (phone == null || !phone.HasTotp)
             {
-                host.SendText(m.ChatId, "Questo comando richiede il codice dell'Authenticator, che non è ancora configurato sul PC " +
-                                        "(Controllo remoto > Codice).");
+                host.SendText(m.ChatId, "Questo comando richiede il codice dell'Authenticator, che per questo telefono non è ancora " +
+                                        "configurato sul PC (Controllo remoto > Codice).");
                 host.Audit(m.FromId, "/" + cmd, "codice non configurato");
                 return false;
             }
 
-            if (nowUtc < lockoutUntilUtc)
+            if (nowUtc < st.LockoutUntilUtc)
             {
-                host.SendText(m.ChatId, "⛔ Troppi codici errati: i comandi con codice sono bloccati fino alle " + LocalTime(lockoutUntilUtc) + ".");
+                host.SendText(m.ChatId, "⛔ Troppi codici errati: i comandi con codice sono bloccati fino alle " + LocalTime(st.LockoutUntilUtc) + ".");
                 host.Audit(m.FromId, "/" + cmd, "bloccato per codici errati");
                 return false;
             }
 
             if (code == null)
             {
-                if (nowUtc < sessionUntilUtc) return true;
+                if (nowUtc < st.SessionUntilUtc) return true;
                 host.SendText(m.ChatId, "Serve il codice dell'Authenticator: /" + cmd + " 123456\n" +
                                         "Oppure /sblocca 123456 per non chiederlo per " + SessionMinutes + " minuti.");
                 host.Audit(m.FromId, "/" + cmd, "codice mancante");
@@ -975,27 +1170,31 @@ namespace WinUsage
             return VerifyCode(m, "/" + cmd, code, nowUtc);
         }
 
+        /// <summary>Verifica il codice con il segreto del telefono che scrive (ogni telefono ha il suo).</summary>
         private bool VerifyCode(IncomingMessage m, string what, string code, DateTime nowUtc)
         {
-            long step = Totp.Verify(secrets.SecretBytes(), code, nowUtc, totpLastStep);
+            PairedPhone phone = secrets.Find(m.FromId);
+            CodeState st = State(m.FromId);
+            long step = phone != null ? Totp.Verify(phone.SecretBytes(), code, nowUtc, st.LastStep) : -1;
             if (step >= 0)
             {
-                totpLastStep = step;
-                host.SaveTotpStep(step);
-                codeFailures = 0;
+                st.LastStep = step;
+                host.SaveTotpStep(m.FromId, step);
+                st.Failures = 0;
                 return true;
             }
 
-            codeFailures++;
-            if (codeFailures >= MaxCodeFailures)
+            st.Failures++;
+            if (st.Failures >= MaxCodeFailures)
             {
-                codeFailures = 0;
-                lockoutUntilUtc = nowUtc.AddMinutes(LockoutMinutes);
-                sessionUntilUtc = DateTime.MinValue;
+                st.Failures = 0;
+                st.LockoutUntilUtc = nowUtc.AddMinutes(LockoutMinutes);
+                st.SessionUntilUtc = DateTime.MinValue;
                 host.SendText(m.ChatId, "⛔ Codice errato per " + MaxCodeFailures + " volte: comandi con codice bloccati per " +
                                         LockoutMinutes + " minuti.");
-                host.SecurityAlert("Codice dell'Authenticator sbagliato " + MaxCodeFailures + " volte dal telefono abbinato. " +
-                                   "I comandi con codice sono bloccati per " + LockoutMinutes + " minuti.");
+                host.SecurityAlert("Codice dell'Authenticator sbagliato " + MaxCodeFailures + " volte dal telefono di " +
+                                   secrets.NameOf(m.FromId) + ". Per quel telefono i comandi con codice sono bloccati per " +
+                                   LockoutMinutes + " minuti.");
                 host.Audit(m.FromId, what, "codice errato, blocco di " + LockoutMinutes + " minuti");
             }
             else
@@ -1027,15 +1226,17 @@ namespace WinUsage
                 case "sblocca":
                 {
                     string code = args.Count > 0 ? args[0] : null;
-                    if (!secrets.HasTotp)
+                    PairedPhone phone = secrets.Find(m.FromId);
+                    CodeState st = State(m.FromId);
+                    if (phone == null || !phone.HasTotp)
                     {
-                        host.SendText(chat, "Il codice dell'Authenticator non è configurato sul PC.");
+                        host.SendText(chat, "Il codice dell'Authenticator per questo telefono non è configurato sul PC.");
                         host.Audit(m.FromId, "/sblocca", "codice non configurato");
                         break;
                     }
-                    if (nowUtc < lockoutUntilUtc)
+                    if (nowUtc < st.LockoutUntilUtc)
                     {
-                        host.SendText(chat, "⛔ Comandi con codice bloccati fino alle " + LocalTime(lockoutUntilUtc) + ".");
+                        host.SendText(chat, "⛔ Comandi con codice bloccati fino alle " + LocalTime(st.LockoutUntilUtc) + ".");
                         host.Audit(m.FromId, "/sblocca", "bloccato per codici errati");
                         break;
                     }
@@ -1046,8 +1247,8 @@ namespace WinUsage
                     }
                     if (VerifyCode(m, "/sblocca", code, nowUtc))
                     {
-                        sessionUntilUtc = nowUtc.AddMinutes(SessionMinutes);
-                        host.SendText(chat, "🔓 Per " + SessionMinutes + " minuti (fino alle " + LocalTime(sessionUntilUtc) +
+                        st.SessionUntilUtc = nowUtc.AddMinutes(SessionMinutes);
+                        host.SendText(chat, "🔓 Per " + SessionMinutes + " minuti (fino alle " + LocalTime(st.SessionUntilUtc) +
                                             ") /blocca e /spegni non chiedono il codice.");
                         host.Audit(m.FromId, "/sblocca", "sessione di " + SessionMinutes + " minuti");
                     }
@@ -1103,7 +1304,7 @@ namespace WinUsage
                 }
 
                 case "chat":
-                    host.OpenChat(true);
+                    host.OpenChat(true, m.FromId);
                     host.SendText(chat, "💬 Richiesta di chat mostrata sul PC: scrivi qui i messaggi (senza /). Ti avviso se la aprono o la rifiutano.");
                     host.Audit(m.FromId, "/chat", "ok");
                     break;
@@ -1116,6 +1317,8 @@ namespace WinUsage
                                  : r == LockResult.AlreadyLocked ? "Il PC era già bloccato."
                                  : "Non è stato possibile bloccare il PC.";
                     host.SendText(chat, reply);
+                    if (r == LockResult.Locked)
+                        host.Broadcast("🔒 " + secrets.NameOf(m.FromId) + " ha bloccato il PC alle " + LocalTime(DateTime.UtcNow) + ".", m.FromId);
                     host.Audit(m.FromId, "/blocca", r.ToString());
                     break;
                 }
@@ -1142,6 +1345,8 @@ namespace WinUsage
                     host.SendText(chat, "⏻ Spegnimento alle " + due.ToString("HH:mm", CultureInfo.InvariantCulture) +
                                         (replacing ? " (sostituisce il precedente)" : "") + ". /annulla per fermarlo." +
                                         (host.PcLocked ? "\n" + LockedShutdownNote : ""));
+                    host.Broadcast("⏻ " + secrets.NameOf(m.FromId) + " ha avviato lo spegnimento: alle " +
+                                   due.ToString("HH:mm", CultureInfo.InvariantCulture) + ". /annulla per fermarlo.", m.FromId);
                     host.Audit(m.FromId, "/spegni " + minutes, "conto alla rovescia avviato");
                     break;
                 }
@@ -1150,6 +1355,7 @@ namespace WinUsage
                 {
                     bool was = host.CancelShutdown(true);
                     host.SendText(chat, was ? "Spegnimento annullato." : "Nessuno spegnimento in corso.");
+                    if (was) host.Broadcast("Spegnimento annullato da " + secrets.NameOf(m.FromId) + ".", m.FromId);
                     host.Audit(m.FromId, "/annulla", was ? "annullato" : "niente da annullare");
                     break;
                 }
@@ -1157,12 +1363,24 @@ namespace WinUsage
                 case "stop":
                     host.Audit(m.FromId, "/stop", "controllo remoto disattivato");
                     host.SendText(chat, "Controllo remoto disattivato. Si riattiva solo dal PC.");
+                    host.Broadcast("Controllo remoto disattivato da " + secrets.NameOf(m.FromId) + ". Si riattiva solo dal PC.", m.FromId);
                     host.DisableRemote();
                     break;
 
                 case "abbina":
                     host.SendText(chat, "Questo telefono è già abbinato.");
                     break;
+
+                case "telefoni":
+                {
+                    StringBuilder sb = new StringBuilder("📱 Telefoni abbinati a " + Environment.MachineName + ":");
+                    foreach (PairedPhone p in secrets.Phones)
+                        sb.Append("\n• ").Append(p.Label).Append(p.Id == m.FromId ? " (questo)" : "")
+                          .Append(p.HasTotp ? "" : " – codice non configurato");
+                    host.SendText(chat, sb.ToString());
+                    host.Audit(m.FromId, "/telefoni", "ok");
+                    break;
+                }
 
                 default:
                     host.SendText(chat, "Comando sconosciuto. /aiuto per l'elenco.");
@@ -1178,13 +1396,14 @@ namespace WinUsage
             sb.Append("/stato – tempi di utilizzo\n");
             sb.Append("/app – applicazione in uso").Append(secrets.CodeApp ? " (codice)" : "").Append('\n');
             sb.Append("/screenshot [n] [hd] – cattura dello schermo").Append(secrets.CodeScreenshot ? " (codice)" : "").Append('\n');
-            sb.Append("/chat – apre la chat sul PC\n");
+            sb.Append("/chat – apre la chat sul PC").Append(secrets.Phones.Count > 1 ? " (la leggono tutti i telefoni abbinati)" : "").Append('\n');
             sb.Append("/blocca").Append(secrets.CodeLock ? " CODICE" : "").Append(" – blocca il PC\n");
             sb.Append("/spegni").Append(secrets.CodeShutdown ? " CODICE" : "").Append(" [minuti] – spegne dopo un conto alla rovescia (")
               .Append(settings.ShutdownDefaultMinutes).Append(" min)\n");
             sb.Append("/annulla – ferma lo spegnimento\n");
             sb.Append("/sblocca CODICE – niente codice per ").Append(SessionMinutes).Append(" minuti\n");
-            sb.Append("/stop – disattiva il controllo remoto (si riattiva dal PC)\n\n");
+            sb.Append("/telefoni – telefoni abbinati\n");
+            sb.Append("/stop – disattiva il controllo remoto per tutti (si riattiva dal PC)\n\n");
             sb.Append("Il testo senza / va nella chat del PC.\n");
             sb.Append("Il PC non ti chiederà mai codici o password in chat: se succede, non è lui.");
             return sb.ToString();

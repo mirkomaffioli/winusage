@@ -68,10 +68,20 @@ connessioni HTTPS in uscita verso `api.telegram.org` (nessuna porta aperta, ness
 **Configurazione in tre passi**
 1. In Telegram apri @BotFather, `/newbot`, copia il token nella scheda *Collegamento* e premi *Verifica*.
    Usa un bot diverso per ogni PC e per ogni utente; consigliato `/setjoingroups` → Disable.
-2. *Avvia abbinamento*: compare un codice di 8 caratteri valido 5 minuti. Scrivi al bot `/abbina CODICE`:
-   il PC chiede conferma con un clic prima di accettare. Da quel momento il bot ascolta solo il tuo account
+2. *Aggiungi telefono*: compare un codice di 8 caratteri valido 5 minuti. Scrivi al bot `/abbina CODICE`:
+   il PC chiede conferma con un clic prima di accettare. Da quel momento il bot ascolta solo i telefoni abbinati
    e ignora tutti gli altri senza rispondere.
-3. Scheda *Codice*: *Genera nuovo segreto*, inquadra il QR con un'app Authenticator e verifica un codice.
+3. Scheda *Codice*: scegli il telefono, *Genera nuovo segreto*, inquadra il QR con l'app Authenticator di quel
+   telefono e verifica un codice.
+
+**Più telefoni (dalla 1.5)**: fino a 5 telefoni sullo stesso PC, ognuno abbinato con *Aggiungi telefono* (gli altri
+ricevono un avviso "nuovo telefono abbinato"). Tutti possono usare tutti i comandi, ma **ognuno ha il suo codice
+Authenticator**: il codice di un telefono non vale per un altro, e anche la sessione `/sblocca` e il blocco dopo 3
+codici errati sono per telefono. Avvisi automatici (accensione, spegnimento...) e chat arrivano a tutti; quando un
+telefono blocca, spegne, annulla lo spegnimento o usa `/stop`, gli altri lo vengono a sapere. Un telefono si toglie
+con *Rimuovi telefono* (lui e gli altri vengono avvisati). `/telefoni` mostra l'elenco. Il registro indica il nome del
+telefono che ha dato ogni comando. Aggiornando dalla 1.4 il telefono già abbinato e il suo codice restano validi;
+tornando a una versione precedente alla 1.5 invece l'abbinamento andrebbe rifatto.
 
 **Comandi**
 
@@ -85,16 +95,24 @@ connessioni HTTPS in uscita verso `api.telegram.org` (nessuna porta aperta, ness
 | `/spegni CODICE [minuti]` | Spegnimento dopo un conto alla rovescia (5 minuti di default, da 1 a 120) | sì |
 | `/annulla` | Ferma lo spegnimento | mai |
 | `/sblocca CODICE` | Per 15 minuti `/blocca` e `/spegni` non chiedono il codice | — |
-| `/stop` | Disattiva il controllo remoto (si riattiva solo dal PC) | no |
+| `/telefoni` | Telefoni abbinati e chi ha il codice configurato | no |
+| `/stop` | Disattiva il controllo remoto per tutti i telefoni (si riattiva solo dal PC) | no |
 | testo senza `/` | Va nella chat del PC | no |
 
 Quali comandi chiedono il codice si sceglie nella scheda *Comandi*.
 
-**Chat**: dal pulsante *CHAT* del popup o con `/chat` dal telefono. Destinatario fisso (il telefono abbinato),
-cronologia attiva di default: riaprendo la chat si ritrovano i messaggi già scambiati, anche quelli arrivati a chat
+**Chat**: dal pulsante *CHAT* del popup o con `/chat` dal telefono. Destinatari fissi: i telefoni abbinati. Con più
+telefoni è una chat di gruppo: quello che scrivi sul PC arriva a tutti, i messaggi di un telefono arrivano anche agli
+altri ("Anna: ...") e sul PC mostrano il nome di chi li ha scritti. Cronologia
+attiva di default: riaprendo la chat si ritrovano i messaggi già scambiati, anche quelli arrivati a chat
 chiusa. La cronologia sta solo in memoria, mai sul disco, quindi sparisce quando WinUsage si chiude o il PC si
-riavvia (e quando si rimuove l'abbinamento). Disattivandola (*Messaggi e notifiche* → *Chat*) i messaggi spariscono a
-ogni chiusura della finestra. Un messaggio arrivato a chat chiusa compare come notifica con *APRI CHAT*. Chi sta al PC e non vuole chattare preme *CHIUDI* (sulla notifica o
+riavvia (e quando si rimuove l'ultimo telefono). Disattivandola (*Messaggi e notifiche* → *Chat*) i messaggi spariscono a
+ogni chiusura della finestra. Un messaggio arrivato a chat chiusa compare come notifica con *APRI CHAT* e, sopra, una
+barra *Rispondi...* per rispondere subito senza aprire la chat (finché si scrive la notifica non sparisce; se poi si apre
+la chat, il testo già scritto passa lì). Le **emoji** si vedono a colori nei messaggi e nelle notifiche (DirectWrite,
+con ritorno automatico al disegno in bianco e nero di GDI se non è disponibile); il pulsante con la faccina apre una
+tavolozza di emoji comuni, e nella casella di testo funziona anche il pannello di Windows (*Win + .*). Nella casella
+mentre si scrive le emoji restano in bianco e nero (limite delle caselle di testo di Windows). Chi sta al PC e non vuole chattare preme *CHIUDI* (sulla notifica o
 nella finestra della chat, oppure chiude con la X): il telefono riceve "chat rifiutata" o "chat chiusa sul PC".
 Se la richiesta resta senza risposta per 20 secondi, il telefono riceve "nessuno ha aperto la chat".
 
@@ -145,7 +163,7 @@ passaggi). Se perdi il telefono: @BotFather → `/revoke`. Se il PC lo usano alt
 
 ## Installare
 
-`dist\WinUsage-Setup-1.4.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.5.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -211,7 +229,7 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 
 - Compilato senza errori né avvisi con `mcs -langversion:5`, cioè con il sottoinsieme di C# del compilatore
   integrato in Windows.
-- `tests/run-tests.sh`: 245 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
+- `tests/run-tests.sh`: 299 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
   cambio utente, mezzanotte, persistenza, storico a 7 e 30 giorni, manutenzione: informazioni, verifica, pulizia,
   compattazione, backup, CSV, azzeramento, conservazione) su SQLite reale. Dalla 1.3 anche il controllo remoto:
   TOTP con i vettori della RFC 6238, Base32, QR, configurazione cifrata e alterata, coda in uscita, spegnimento
@@ -234,11 +252,15 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
   i comandi a volte andavano ripetuti (lettura appesa su connessioni morte, attese fino a 5 minuti dopo un errore di
   rete, comandi in ritardo scartati); `/spegni` a PC bloccato non funzionava (il timer fermo veniva scambiato per
   uno standby, ed `ExitWindowsEx` non spegne una sessione bloccata).
+- 1.4.1: un messaggio lungo (oltre 2000 caratteri con il prefisso) con un'emoji proprio sul confine del pezzo da
+  codificare non partiva: la codifica spezzava l'emoji a metà. Ora i tagli non dividono mai un'emoji.
 - **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
   notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
   Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio) e,
   per il controllo remoto, le correzioni della 1.4.0 (cattura in pixel fisici, `InitiateShutdown` a PC bloccato,
-  PC tenuto sveglio durante il conto alla rovescia, lettura più robusta), i pulsanti *CHIUDI* e la cronologia della chat.
+  PC tenuto sveglio durante il conto alla rovescia, lettura più robusta), i pulsanti *CHIUDI*, la cronologia, la
+  risposta rapida e le emoji a colori della chat (DirectWrite, `src/ColorText.cs`: se nel log compare "emoji a colori
+  disattivate", l'app è tornata a GDI), più telefoni abbinati (1.5).
   `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura

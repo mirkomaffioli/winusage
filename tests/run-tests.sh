@@ -5,8 +5,8 @@ set -e
 cd "$(dirname "$0")"
 OUT=${TMPDIR:-/tmp}/winusage-tests
 mkdir -p "$OUT"
-mcs -langversion:5 -out:"$OUT/tests.exe" -r:System.Drawing.dll -r:System.Web.Extensions.dll -r:System.Security.dll \
-  ../src/Db.cs ../src/Core.cs ../src/UsageTracker.cs ../src/History.cs ../src/ChipTune.cs ../src/Art.cs ../src/Sprites.cs \
+mcs -langversion:5 -out:"$OUT/tests.exe" -r:System.Drawing.dll -r:System.Windows.Forms.dll -r:System.Web.Extensions.dll -r:System.Security.dll \
+  ../src/ColorText.cs ../src/Db.cs ../src/Core.cs ../src/UsageTracker.cs ../src/History.cs ../src/ChipTune.cs ../src/Art.cs ../src/Sprites.cs \
   ../src/RemoteCore.cs ../src/Telegram.cs ../src/Qr.cs Tests.cs RemoteTests.cs
 cat > "$OUT/tests.exe.config" <<'XML'
 <configuration>

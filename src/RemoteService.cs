@@ -87,7 +87,7 @@ namespace WinUsage
             secrets = RemoteSecrets.Load(storage, out damaged);
             settings = RemoteSettings.Load(storage);
             NotifyCenter.Sounds = settings.Sounds;
-            controller = new RemoteController(this, secrets, settings, store.TotpLastStep);
+            controller = new RemoteController(this, secrets, settings, store.TotpLastStep);   // passo TOTP per telefono
 
             sendThread = new Thread(SendLoop);
             sendThread.IsBackground = true;
@@ -131,7 +131,18 @@ namespace WinUsage
 
             DateTime now = DateTime.UtcNow;
             foreach (OutboxItem it in store.LoadOutbox(now))
-                EnqueuePersistentExisting(it.Id, PowerMessages.Late(it.Text, it.CreatedUtc, now));
+            {
+                if (it.ChatId == 0)
+                {
+                    // riga della 1.4 (un telefono solo): diventa una riga per ogni telefono abbinato
+                    store.RemoveOutbox(it.Id);
+                    foreach (PairedPhone p in secrets.Phones)
+                        EnqueuePersistentExisting(store.AddOutbox(it.Kind, it.Text, it.CreatedUtc, p.Id), p.Id,
+                                                  PowerMessages.Late(it.Text, it.CreatedUtc, now));
+                }
+                else if (!secrets.IsPaired(it.ChatId)) store.RemoveOutbox(it.Id);   // telefono rimosso nel frattempo
+                else EnqueuePersistentExisting(it.Id, it.ChatId, PowerMessages.Late(it.Text, it.CreatedUtc, now));
+            }
 
             DateTime lastSeen;
             bool clean;
@@ -178,16 +189,30 @@ namespace WinUsage
             controller.StopPairing();
         }
 
-        public void Unpair()
+        /// <summary>
+        /// Toglie un telefono (con il suo codice Authenticator). Il telefono tolto e gli altri lo vengono a sapere. Con
+        /// l'ultimo telefono si fermano anche lo spegnimento da remoto e la chat, e la cronologia si cancella.
+        /// </summary>
+        public void RemovePhone(long phoneId)
         {
-            secrets.UserId = 0;
-            secrets.UserName = "";
-            secrets.TotpSecret = "";
-            secrets.TotpVerified = false;
+            PairedPhone p = secrets.Find(phoneId);
+            if (p == null) return;
+            string name = p.Label;
+            if (Listening) SendText(phoneId, "Questo telefono non è più abbinato a " + PowerMessages.PcName + ".");
+            secrets.Phones.Remove(p);
             secrets.Save(storage);
             controller.Apply(secrets, settings);
-            CancelShutdown(false);
-            CloseChat(true);   // un altro telefono non deve vedere la chat del precedente
+            Audit(0, "(abbinamento)", "telefono rimosso: " + name);
+            if (secrets.Paired)
+            {
+                if (Listening) Broadcast("📱 " + name + " non è più abbinato a " + PowerMessages.PcName + ".", 0);
+                if (chatForm != null && !chatForm.IsDisposed) chatForm.SetPhones(ChatTitle(), ChatGroupNames());
+            }
+            else
+            {
+                CancelShutdown(false);
+                CloseChat(true);
+            }
             RaiseStateChanged();
         }
 
@@ -294,7 +319,7 @@ namespace WinUsage
                                                 "possibile token compromesso, oppure WinUsage configurato con questo bot su un altro PC. " +
                                                 "Usa un bot per ogni PC; se non sei stato tu, revoca il token da @BotFather (/revoke).";
                             SecurityAlert(text);
-                            if (secrets.Paired) SendText(secrets.UserId, "⚠️ " + text);
+                            Broadcast("⚠️ " + text, 0);
                         });
                         Wait(30000);
                     }
@@ -341,18 +366,19 @@ namespace WinUsage
         }
 
         /// <summary>Messaggio persistente: passa dalla coda nel database, così non si perde senza rete o allo spegnimento.</summary>
+        /// <summary>Una riga per telefono: chi non lo riceve subito lo riceve dopo, senza doppioni per gli altri.</summary>
         private void EnqueuePersistent(string kind, string text)
         {
-            if (!secrets.Paired) return;
-            long id = store.AddOutbox(kind, text, DateTime.UtcNow);
-            EnqueuePersistentExisting(id, text);
+            DateTime now = DateTime.UtcNow;
+            foreach (PairedPhone p in secrets.Phones)
+                EnqueuePersistentExisting(store.AddOutbox(kind, text, now, p.Id), p.Id, text);
         }
 
-        private void EnqueuePersistentExisting(long id, string text)
+        private void EnqueuePersistentExisting(long id, long chatId, string text)
         {
             OutItem it = new OutItem();
             it.Type = 0;
-            it.ChatId = secrets.UserId;
+            it.ChatId = chatId;
             it.Text = text;
             it.OutboxId = id;
             Enqueue(it);
@@ -419,16 +445,35 @@ namespace WinUsage
         private void SendNowOrLater(string kind, string text, int timeoutMs)
         {
             if (!secrets.Paired) return;
-            long id = store.AddOutbox(kind, text, DateTime.UtcNow);
-            try
+            // a tutti i telefoni in parallelo: il tempo che Windows concede allo spegnimento è uno solo
+            string token = secrets.Token;
+            DateTime now = DateTime.UtcNow;
+            List<long> sentRows = new List<long>();
+            List<ManualResetEvent> waits = new List<ManualResetEvent>();
+            foreach (PairedPhone p in secrets.Phones)
             {
-                new TelegramApi(secrets.Token).SendMessage(secrets.UserId, text, timeoutMs);
-                store.RemoveOutbox(id);
+                long row = store.AddOutbox(kind, text, now, p.Id);
+                long chat = p.Id;
+                ManualResetEvent ev = new ManualResetEvent(false);
+                waits.Add(ev);
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    try
+                    {
+                        new TelegramApi(token).SendMessage(chat, text, timeoutMs);
+                        lock (sentRows) sentRows.Add(row);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Write("Messaggio \"" + kind + "\" rimandato al prossimo avvio: " + TelegramApi.Redact(ex.Message, token));
+                    }
+                    finally { ev.Set(); }
+                });
             }
-            catch (Exception ex)
-            {
-                Log.Write("Messaggio \"" + kind + "\" rimandato al prossimo avvio: " + TelegramApi.Redact(ex.Message, secrets.Token));
-            }
+            DateTime until = DateTime.UtcNow.AddMilliseconds(timeoutMs + 500);
+            foreach (ManualResetEvent ev in waits)   // una attesa alla volta: WaitAll non è permesso nel thread dell'interfaccia
+                ev.WaitOne(Math.Max(0, (int)(until - DateTime.UtcNow).TotalMilliseconds));
+            lock (sentRows) foreach (long row in sentRows) store.RemoveOutbox(row);
         }
 
         private void Post(Action action)
@@ -464,8 +509,8 @@ namespace WinUsage
                 if (countdown.LateSeconds(nowUtc) > 120 && !PcLocked)
                 {
                     HideCountdownUi();
-                    Audit(secrets.UserId, "(spegnimento)", "annullato: scaduto in ritardo con il PC in uso");
-                    if (Active) SendText(secrets.UserId, "Spegnimento annullato: il conto alla rovescia è scaduto mentre il PC era sospeso e ora il PC è in uso.");
+                    Audit(0, "(spegnimento)", "annullato: scaduto in ritardo con il PC in uso");
+                    if (Active) Broadcast("Spegnimento annullato: il conto alla rovescia è scaduto mentre il PC era sospeso e ora il PC è in uso.", 0);
                     ShowCancelled("IL PC ERA SOSPESO");
                 }
                 else OnCountdownExpired(nowUtc);
@@ -485,22 +530,25 @@ namespace WinUsage
             {
                 shutdownIssuedUtc = DateTime.MinValue;
                 RemoteActions.KeepAwake(false);
-                if (Active) SendText(secrets.UserId, "⚠️ Spegnimento bloccato da un'applicazione (probabilmente un documento non salvato).");
+                if (Active) Broadcast("⚠️ Spegnimento bloccato da un'applicazione (probabilmente un documento non salvato).", 0);
             }
 
             if ((nowUtc - lastDeleteCheckUtc).TotalSeconds >= 30)
             {
                 lastDeleteCheckUtc = nowUtc;
-                if (secrets.Paired) foreach (long id in store.DueDeletes(nowUtc)) EnqueueDelete(id);
+                if (secrets.Paired) foreach (KeyValuePair<long, long> d in store.DueDeletes(nowUtc)) EnqueueDelete(d.Key, d.Value);
             }
         }
 
-        private void EnqueueDelete(long messageId)
+        /// <param name="storedChat">Chat salvata con lo screenshot; 0 = screenshot della 1.4, mandato al primo telefono.</param>
+        private void EnqueueDelete(long storedChat, long messageId)
         {
-            store.RemovePendingDelete(messageId);   // un tentativo solo: se non riesce si riprova al prossimo screenshot
+            store.RemovePendingDelete(storedChat, messageId);   // un tentativo solo
+            long chat = storedChat != 0 ? storedChat : (secrets.Paired ? secrets.Phones[0].Id : 0);
+            if (chat == 0) return;
             OutItem it = new OutItem();
             it.Type = 2;
-            it.ChatId = secrets.UserId;
+            it.ChatId = chat;
             it.MessageId = messageId;
             Enqueue(it);
         }
@@ -510,7 +558,7 @@ namespace WinUsage
             if (countdown.CancelForSleep())
             {
                 HideCountdownUi();
-                Audit(secrets.UserId, "(spegnimento)", "annullato: PC in standby");
+                Audit(0, "(spegnimento)", "annullato: PC in standby");
                 sleepCancelPending = true;
             }
             if (Active && settings.MsgSleep) SendNowOrLater("sleep", "💤 " + PowerMessages.PcName + " in standby " + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow), 2000);
@@ -524,7 +572,7 @@ namespace WinUsage
             if (sleepCancelPending)
             {
                 sleepCancelPending = false;
-                if (Active) SendText(secrets.UserId, "Spegnimento annullato: il PC è andato in standby durante il conto alla rovescia.");
+                if (Active) Broadcast("Spegnimento annullato: il PC è andato in standby durante il conto alla rovescia.", 0);
                 ShowCancelled("IL PC ERA IN STANDBY");
             }
             if (Active && settings.MsgSleep) EnqueuePersistent("resume", "☀️ " + PowerMessages.PcName + " ripreso " + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow));
@@ -587,17 +635,17 @@ namespace WinUsage
         private void OnCountdownExpired(DateTime nowUtc)
         {
             HideCountdownUi();
-            Audit(secrets.UserId, "(spegnimento)", "conto alla rovescia scaduto");
+            Audit(0, "(spegnimento)", "conto alla rovescia scaduto");
             tracker.FlushNow(nowUtc);
             // PC bloccato: nessuno può salvare o rispondere a "un'app impedisce l'arresto", che fermerebbe tutto. Si forza.
             bool force = PcLocked;
-            if (force) Audit(secrets.UserId, "(spegnimento)", "PC bloccato: spegnimento forzato");
+            if (force) Audit(0, "(spegnimento)", "PC bloccato: spegnimento forzato");
             if (RemoteActions.PowerOff(force))
             {
                 shutdownIssuedUtc = nowUtc;
                 RemoteActions.KeepAwake(true);   // finché Windows non chiude, il PC non deve addormentarsi
             }
-            else if (Active) SendText(secrets.UserId, "⚠️ Windows non ha accettato lo spegnimento.");
+            else if (Active) Broadcast("⚠️ Windows non ha accettato lo spegnimento.", 0);
         }
 
         private void ShowCountdownNotice(int seconds)
@@ -639,7 +687,7 @@ namespace WinUsage
             if (!countdown.Cancel()) return;
             HideCountdownUi();
             Audit(0, "(annullato dal PC)", "spegnimento annullato");
-            if (Active) SendText(secrets.UserId, "Spegnimento annullato dal PC alle " + RemoteController.LocalTime(DateTime.UtcNow) + ".");
+            if (Active) Broadcast("Spegnimento annullato dal PC alle " + RemoteController.LocalTime(DateTime.UtcNow) + ".", 0);
             ShowCancelled("ANNULLATO DA QUI");
         }
 
@@ -668,7 +716,7 @@ namespace WinUsage
         {
             if (chatForm == null || chatForm.IsDisposed)
             {
-                chatForm = new RemoteChatForm(secrets.UserName, icon, settings.ChatHistory);
+                chatForm = new RemoteChatForm(ChatTitle(), icon, settings.ChatHistory, ChatGroupNames());
                 chatForm.SendRequested += SendChat;
                 chatForm.LoadHistory(chatHistory.Snapshot());
                 chatForm.FormClosed += delegate(object s, FormClosedEventArgs e)
@@ -678,8 +726,8 @@ namespace WinUsage
                     // Chiusa da chi sta al PC (CHIUDI o X): il telefono lo sa e non scrive a vuoto.
                     if (!chatClosingSilently && e.CloseReason == CloseReason.UserClosing && Active)
                     {
-                        SendText(secrets.UserId, "💬 Chat chiusa sul PC alle " + RemoteController.LocalTime(DateTime.UtcNow) +
-                                                 ". I prossimi messaggi arriveranno come notifica.");
+                        Broadcast("💬 Chat chiusa sul PC alle " + RemoteController.LocalTime(DateTime.UtcNow) +
+                                                 ". I prossimi messaggi arriveranno come notifica.", 0);
                         Audit(0, "(chat dal PC)", "chat chiusa");
                     }
                 };
@@ -708,25 +756,40 @@ namespace WinUsage
             if (!settings.ChatHistory) chatHistory.Clear();
             NotifyCenter.Remove(NotifyKind.ChatMessage);
             if (!Active) return;
-            SendText(secrets.UserId, "💬 Chat rifiutata sul PC: chi è al computer non vuole chattare adesso.");
+            Broadcast("💬 Chat rifiutata sul PC: chi è al computer non vuole chattare adesso.", 0);
             Audit(0, "(chat dal PC)", "chat rifiutata");
         }
 
-        /// <summary>Testo scritto nella chat del PC: va solo al telefono abbinato.</summary>
+        /// <summary>Nome per l'intestazione della chat: il telefono, o "tutti i telefoni" se sono più d'uno.</summary>
+        private string ChatTitle()
+        {
+            if (secrets.Phones.Count == 1) return secrets.Phones[0].Label;
+            return "TUTTI I " + secrets.Phones.Count + " TELEFONI";   // niente parentesi: il font pixel non le ha
+        }
+
+        /// <summary>Nomi dei telefoni se la chat è di gruppo, altrimenti null.</summary>
+        private string ChatGroupNames()
+        {
+            return secrets.Phones.Count > 1 ? secrets.Names() : null;
+        }
+
+        /// <summary>Testo scritto sul PC (chat o risposta rapida): va a tutti i telefoni abbinati.</summary>
         private bool SendChat(string text)
         {
             if (!Active || string.IsNullOrEmpty(text)) return false;
-            OutItem it = new OutItem();
-            it.Type = 0;
-            it.ChatId = secrets.UserId;
-            it.Text = "💬 " + text;
-            Enqueue(it);
+            Broadcast("💬 " + text, 0);
             chatHistory.Add(text, true, DateTime.UtcNow);
             Audit(0, "(chat dal PC)", text.Length + " caratteri");
             return true;
         }
 
         // ---- IRemoteHost ----
+
+        /// <summary>Lo stesso testo a tutti i telefoni abbinati, tranne <paramref name="exceptId"/> (0 = a tutti).</summary>
+        public void Broadcast(string text, long exceptId)
+        {
+            foreach (PairedPhone p in secrets.Phones) if (p.Id != exceptId) SendText(p.Id, text);
+        }
 
         public void SendText(long chatId, string text)
         {
@@ -745,7 +808,7 @@ namespace WinUsage
             it.Data = shot.Data;
             it.AsDocument = shot.Png;
             int minutes = settings.ScreenshotDeleteMinutes;
-            if (minutes > 0) it.OnSent = delegate(long id) { store.AddPendingDelete(id, DateTime.UtcNow.AddMinutes(minutes)); };
+            if (minutes > 0) it.OnSent = delegate(long id) { store.AddPendingDelete(chatId, id, DateTime.UtcNow.AddMinutes(minutes)); };
             Enqueue(it);
         }
 
@@ -812,12 +875,12 @@ namespace WinUsage
 
         public bool PcLocked { get { return locked || Probe.UserAway(); } }
 
-        public void OpenChat(bool requestedRemotely)
+        public void OpenChat(bool requestedRemotely, long fromId)
         {
             if (chatForm != null && !chatForm.IsDisposed)
             {
                 chatForm.ShowChat(false);
-                if (Active) SendText(secrets.UserId, "💬 La chat è già aperta sul PC.");
+                if (Active) SendText(fromId, "💬 La chat è già aperta sul PC.");
                 return;
             }
             // Non si apre di colpo una finestra mentre qualcuno lavora o gioca: notifica con APRI CHAT.
@@ -825,6 +888,12 @@ namespace WinUsage
             r.Kind = NotifyKind.ChatRequest;
             r.Title = "IL TELEFONO VUOLE CHATTARE";
             r.Big = "CHAT";
+            if (secrets.Phones.Count > 1)
+            {
+                // con più telefoni si dice chi chiede (se il font pixel ha le lettere del nome)
+                string who = secrets.NameOf(fromId).ToUpperInvariant();
+                r.Line3 = PixelFont.CanDraw(who) ? "DA " + who : "DA UN TELEFONO";
+            }
             r.Button = "APRI CHAT";
             r.Button2 = "CHIUDI";
             r.Seconds = 20;
@@ -834,7 +903,7 @@ namespace WinUsage
             {
                 bool wasOpen = chatForm != null && !chatForm.IsDisposed;
                 ShowChat(true);
-                if (!wasOpen && Active) SendText(secrets.UserId, "💬 Chat aperta sul PC: puoi scrivere.");
+                if (!wasOpen && Active) Broadcast("💬 Chat aperta sul PC: puoi scrivere.", 0);
             };
             r.OnButton = accept;
             r.OnClick = accept;
@@ -842,18 +911,22 @@ namespace WinUsage
             r.OnTimeout = delegate
             {
                 if ((chatForm == null || chatForm.IsDisposed) && Active)
-                    SendText(secrets.UserId, "💬 Nessuno ha aperto la chat sul PC. I messaggi arriveranno come notifica.");
+                    SendText(fromId, "💬 Nessuno ha aperto la chat sul PC. I messaggi arriveranno come notifica.");
             };
             NotifyCenter.Remove(NotifyKind.ChatRequest);   // una richiesta sola alla volta
             NotifyCenter.Show(r);
         }
 
-        public void DeliverChat(string text, DateTime sentUtc)
+        public void DeliverChat(string text, DateTime sentUtc, long fromId)
         {
-            chatHistory.Add(text, false, sentUtc);
+            string sender = secrets.NameOf(fromId);
+            bool group = secrets.Phones.Count > 1;
+            chatHistory.Add(text, false, sentUtc, sender);
+            // chat di gruppo: anche gli altri telefoni leggono quello che ha scritto
+            if (group) Broadcast("💬 " + sender + ": " + text, fromId);
             if (chatForm != null && !chatForm.IsDisposed)
             {
-                chatForm.AddIncoming(text, sentUtc);
+                chatForm.AddIncoming(text, sentUtc, group ? sender : null);
                 chatForm.ShowChat(false);
                 return;
             }
@@ -861,15 +934,23 @@ namespace WinUsage
             NotifyRequest r = new NotifyRequest();
             r.Kind = NotifyKind.ChatMessage;
             r.Title = "MESSAGGIO DAL TELEFONO";
-            r.FreeText = text;
+            r.FreeText = group ? sender + ": " + text : text;
+            r.QuickReplyCue = group ? "Rispondi a tutti..." : "Rispondi...";
             r.Button = "APRI CHAT";
             r.Button2 = "CHIUDI";
             r.OnButton2 = RefuseChat;
-            r.Seconds = 11;
+            r.Seconds = 15;   // il tempo di cliccare su "rispondi"; mentre si scrive non sparisce
             r.Priority = 1;
             r.Tune = 2;
-            r.OnButton = delegate { ShowChat(true); };
-            r.OnClick = delegate { ShowChat(true); };
+            // risposta rapida dalla notifica, senza aprire la chat; se si apre la chat, quanto scritto passa lì
+            r.QuickReply = SendChat;
+            Action open = delegate
+            {
+                ShowChat(true);
+                if (chatForm != null && !chatForm.IsDisposed) chatForm.SetDraft(r.ReplyDraft);
+            };
+            r.OnButton = open;
+            r.OnClick = open;
             NotifyCenter.Show(r);
         }
 
@@ -896,9 +977,13 @@ namespace WinUsage
                     owner.StartPosition = FormStartPosition.CenterScreen;
                     owner.Size = new Size(1, 1);
                     owner.Show();
+                    string others = secrets.Paired
+                        ? "\r\n\r\nSi aggiunge ai telefoni già abbinati (" + secrets.Names() + "): potrà usare tutti i comandi " +
+                          "e leggerà la chat e gli avvisi. Gli altri telefoni riceveranno un avviso."
+                        : "";
                     ok = MessageBox.Show(owner,
                         "Abbinare questo account Telegram al controllo remoto di WinUsage?\r\n\r\n" + name + "\r\nid " +
-                        userId.ToString(CultureInfo.InvariantCulture) + "\r\n\r\nSe non sei stato tu a chiederlo, rispondi No.",
+                        userId.ToString(CultureInfo.InvariantCulture) + others + "\r\n\r\nSe non sei stato tu a chiederlo, rispondi No.",
                         "WinUsage - Abbinamento", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
                 }
                 done(ok);
@@ -968,9 +1053,9 @@ namespace WinUsage
             RaiseStateChanged();
         }
 
-        public void SaveTotpStep(long step)
+        public void SaveTotpStep(long phoneId, long step)
         {
-            store.TotpLastStep = step;
+            store.SetTotpLastStep(phoneId, step);
         }
 
         public string StatusText()
@@ -986,6 +1071,7 @@ namespace WinUsage
                 sb.Append(TimerIds.Labels[i]).Append(' ').Append(Fmt.Compact(tracker.Today(i)));
             }
             if (locked || Probe.UserAway()) sb.Append("\n🔒 PC bloccato");
+            if (secrets.Phones.Count > 1) sb.Append("\n📱 Telefoni abbinati: ").Append(secrets.Phones.Count);
             if (countdown.Active) sb.Append("\n⏻ Spegnimento alle ").Append(countdown.DueUtc.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture));
             return sb.ToString();
         }
