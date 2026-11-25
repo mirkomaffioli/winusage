@@ -1,4 +1,10 @@
-# WinUsage 1.3
+# WinUsage 1.6
+
+*English: WinUsage is a small Windows 11 tray utility that measures how long you have been using the computer
+(standby and locked screen excluded), with per-user history, pixel-art notifications and optional remote control from
+Telegram. Since 1.6 the whole app, the installer and the Telegram bot are also in English: it follows the Windows
+language, or choose it in Settings → "Lingua / Language". Bot commands work in both languages (/lock, /shutdown,
+/cancel, /status, /unlock, /phones, /pair, /help).*
 
 Piccola utility per Windows 11 che vive nella tray e misura da quanto tempo stai usando il computer
 (standby e schermo bloccato esclusi), con storico in SQLite separato per ogni utente. Grafica in pixel art a tema subacqueo.
@@ -154,16 +160,24 @@ nella tray ha un pallino verde.
 Limiti da sapere: i bot di Telegram non hanno cifratura end-to-end, quindi Telegram può leggere comandi,
 screenshot e orari; chi controlla il tuo account Telegram può vedere il tuo schermo (attiva la verifica in due
 passaggi). Se perdi il telefono: @BotFather → `/revoke`. Se il PC lo usano altre persone, avvisale.
+Con il PC in standby, ibernato o spento WinUsage non può ricevere nulla: Telegram conserva i comandi e il PC li esegue
+al risveglio, tranne `/blocca`, `/spegni` e `/sblocca` più vecchi di 2 minuti, che rispondono "comando scaduto".
+Ogni comando ricevuto, anche rifiutato, compare nella scheda *Registro*.
 
 ### Configurazione
 - Avvio automatico con Windows (attivo di default)
+- **Lingua / Language** (dalla 1.6): *Automatica* (italiano se Windows è in italiano, altrimenti inglese), *Italiano* o
+  *English*. Vale per finestre, menu, notifiche pixel art e messaggi del bot Telegram; cambiandola WinUsage chiede di
+  riavviarsi. I comandi del bot funzionano in tutte e due le lingue (`/blocca` o `/lock`, `/spegni` o `/shutdown`,
+  `/annulla` o `/cancel`, `/stato` o `/status`, `/sblocca` o `/unlock`, `/telefoni` o `/phones`, `/abbina` o
+  `/pair`, `/aiuto` o `/help`); l'aiuto mostra quelli della lingua scelta. L'installer usa la lingua di Windows.
 - Notifica a intervalli regolari: attiva/disattiva e ogni quanti minuti (default 60)
 - Timer Browser: attiva/disattiva e elenco dei processi considerati browser
 - Timer Steam: attiva/disattiva
 
 ## Installare
 
-`dist\WinUsage-Setup-1.5.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.6.1.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -171,9 +185,32 @@ configurazione dell'utente (`%LOCALAPPDATA%\WinUsage`, per default no). Supporta
 
 Essendo per-utente, ogni utente Windows che vuole la misura deve installare l'app (o avviarla dalla stessa
 cartella): ognuno ha poi il proprio storico. Windows SmartScreen può mostrare un avviso perché l'installer non è
-firmato digitalmente.
+firmato digitalmente (vedi *Firma del codice*).
 
-Per rigenerare l'installer: `build-installer.bat` (Windows, richiede NSIS) oppure `sh build-installer.sh` (Linux).
+Per rigenerare l'installer: `build-installer.bat` (Windows, richiede NSIS 3.08 o successivo) oppure
+`sh build-installer.sh` (Linux).
+
+### Firma del codice (dalla 1.6)
+Gli script sono pronti; manca solo il certificato, che va ottenuto a parte. Con la firma configurata
+`build-installer.sh` / `build-installer.bat` firmano `WinUsage.exe` (prima di metterlo nell'installer), il programma
+di disinstallazione (mentre NSIS lo crea) e l'installer, con marca temporale RFC 3161 così la firma resta valida
+anche dopo la scadenza del certificato. Senza configurazione la build resta non firmata come prima.
+
+- `sign.sh` (Linux/macOS, con `osslsigncode` o `jsign`) e `sign.bat` (Windows, con `signtool`): certificato `.pfx`,
+  token USB (PKCS#11 su Linux, archivio certificati su Windows) o firma nel cloud (jsign: SSL.com eSigner, Azure,
+  DigiCert, Google KMS...). La configurazione va in variabili d'ambiente oppure in `sign.env` / `sign.env.bat`,
+  che con certificati e chiavi sono esclusi da git.
+- `tools/make-test-cert.sh` crea un certificato **di prova** autofirmato per provare gli script: la firma risulta
+  valida ma Windows non si fida di quel certificato, quindi SmartScreen continua ad avvisare.
+
+Come ottenere un certificato vero (situazione a novembre 2026):
+- **SignPath Foundation**: gratis per progetti open source, ma il certificato è intestato alla fondazione (che compare
+  come editore), servono una licenza approvata da OSI (oggi il repository non ne ha) e la build automatica su
+  GitHub Actions da cui esce il file firmato.
+- **Certificato a proprio nome** (IV per i privati, OV per le aziende): da circa 200 $ l'anno, con la chiave su un
+  token USB o in un servizio di firma nel cloud (obbligatorio dal 2023); durata massima 458-460 giorni dal marzo 2026.
+- **Azure Artifact Signing** (circa 10 $ al mese): disponibile per le organizzazioni nell'UE, ma per i privati solo in
+  USA e Canada.
 
 ## Compilare
 
@@ -187,6 +224,9 @@ le librerie di Mono: alcune classi stanno in DLL diverse e l'exe si chiuderebbe 
 (è successo con la 1.3.0, sistemato nella 1.3.1):
 
     bash build-mono.sh
+
+`build.bat` compila con `/codepage:65001`: i sorgenti sono in UTF-8 senza BOM (emoji e lettere accentate nei testi) e
+il compilatore di Windows altrimenti li leggerebbe con la codepage di sistema.
 
 Risultato: `bin\WinUsage.exe` (circa 350 KB con l'icona, richiede .NET Framework 4.8, già presente in Windows 11).
 Copialo dove vuoi e avvialo: al primo avvio si registra per l'avvio automatico.
@@ -229,16 +269,21 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 
 - Compilato senza errori né avvisi con `mcs -langversion:5`, cioè con il sottoinsieme di C# del compilatore
   integrato in Windows.
-- `tests/run-tests.sh`: 299 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
+- `tests/run-tests.sh`: 348 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
   cambio utente, mezzanotte, persistenza, storico a 7 e 30 giorni, manutenzione: informazioni, verifica, pulizia,
   compattazione, backup, CSV, azzeramento, conservazione) su SQLite reale. Dalla 1.3 anche il controllo remoto:
   TOTP con i vettori della RFC 6238, Base32, QR, configurazione cifrata e alterata, coda in uscita, spegnimento
   improvviso e aggiornamento dalla 1.2, lettura degli update di Telegram, abbinamento (codice scaduto, tentativi,
   conferma negata), mittenti e messaggi ignorati, comandi scaduti, codici giusti/errati/riusati, blocco dopo 3
-  errori, sessione /sblocca, minuti di /spegni, limiti di frequenza, conto alla rovescia e standby.
+  errori, sessione /sblocca, minuti di /spegni, limiti di frequenza, conto alla rovescia e standby. Dalla 1.6.1 anche il
+  client Telegram contro un server finto (`tests/FakeTelegram.cs`): la lettura si interrompe anche dopo un invio, un
+  invio in corso non viene interrotto, dopo la chiusura nessuna lettura parte più, connessioni nuove dopo un risveglio e
+  per ogni invio, attese tra i tentativi di invio.
 - Controllo remoto provato da capo a fondo con Mono contro un server Telegram finto (lettura dei messaggi, risposte,
   screenshot inviato in multipart, messaggi di accensione, spegnimento improvviso e spegnimento). Il QR mostrato
-  nella finestra *Controllo remoto* è stato decodificato con OpenCV.
+  nella finestra *Controllo remoto* è stato decodificato con OpenCV. Dalla 1.6.1 la prova da capo a fondo è nel
+  repository: `tests/run-remote-e2e.sh` (14 controlli, circa 30 secondi) fa girare il vero servizio del controllo remoto
+  contro il server finto e riproduce i casi in cui la 1.6.0 perdeva i comandi; sulla 1.6.0 fallisce 6 controlli su 14.
 - Messaggio di soglia, notifiche del controllo remoto e grafico dello storico disegnati su PNG con Mono e controllati
   a occhio (`docs/`).
 - L'installer si compila senza avvisi con NSIS 3.09.
@@ -254,18 +299,26 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
   uno standby, ed `ExitWindowsEx` non spegne una sessione bloccata).
 - 1.4.1: un messaggio lungo (oltre 2000 caratteri con il prefisso) con un'emoji proprio sul confine del pezzo da
   codificare non partiva: la codifica spezzava l'emoji a metà. Ora i tagli non dividono mai un'emoji.
+- 1.6.1: i comandi da Telegram a volte si perdevano. Premendo *Salva* o *Aggiungi telefono* in *Controllo remoto* entro
+  circa 25 secondi da un messaggio del PC, il thread di lettura vecchio restava vivo accanto al nuovo: i due si rubavano
+  i messaggi, quelli presi dal vecchio venivano confermati a Telegram e poi scartati, e compariva il falso avviso
+  "un altro programma sta leggendo i messaggi del bot". La causa: lettura e invii usavano lo stesso client con un solo
+  campo per la richiesta in corso, quindi dopo un invio l'interruzione non fermava la lettura. Lo stesso difetto impediva
+  spesso alla lettura di ripartire dopo risveglio, sblocco o cambio di rete (fino a 40 secondi di ritardo). Inoltre un
+  messaggio che non partiva (come "PC acceso" con la rete lenta) teneva ferme le risposte in coda fino a 5 minuti.
 - **Non ancora provato su un Windows reale**: tray, popup, finestre, animazione e posizione del toast,
   notifiche, eventi di alimentazione, `winsqlite3.dll`, registro e l'esecuzione dell'installer.
   Lo stesso vale per il comportamento a schermo intero (`SHQueryUserNotificationState`, `SetWindowPos`, audio) e,
   per il controllo remoto, le correzioni della 1.4.0 (cattura in pixel fisici, `InitiateShutdown` a PC bloccato,
   PC tenuto sveglio durante il conto alla rovescia, lettura più robusta), i pulsanti *CHIUDI*, la cronologia, la
   risposta rapida e le emoji a colori della chat (DirectWrite, `src/ColorText.cs`: se nel log compare "emoji a colori
-  disattivate", l'app è tornata a GDI), più telefoni abbinati (1.5).
+  disattivate", l'app è tornata a GDI), più telefoni abbinati (1.5), le correzioni della lettura e degli invii della
+  1.6.1 (provate con Mono contro il server finto, non ancora con .NET Framework su Windows e Telegram vero).
   `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura
 
-    src/Core.cs          formattazione, impostazioni, accesso al database e manutenzione
+    src/Core.cs          lingua (L.T), formattazione, impostazioni, accesso al database e manutenzione
     src/Art.cs           font pixel 5x7, scena animata del messaggio di soglia
     src/Sprites.cs       sprite (generato da tools/make_art.py)
     src/ToastForm.cs     finestra del messaggio di soglia
@@ -289,10 +342,14 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
     src/RemoteSprites.cs sprite 16x16 delle notifiche
     src/RemoteChatForm.cs finestra di chat e pulsante pixel art
     src/RemoteSettingsForm.cs finestra "Controllo remoto"
+    src/ColorText.cs     testo con emoji a colori (DirectWrite), con ritorno a GDI
+    src/ChatWidgets.cs   tavolozza di emoji e barra di risposta rapida
+    sign.sh, sign.bat    firma Authenticode (facoltativa) usata dagli script dell'installer
     tools/make_art.py    genera icona, sprite e immagini dell'installer (Pillow)
     installer/           script NSIS e immagini
     docs/                anteprime
-    tests/               collaudo della logica (Mono); render-preview.sh disegna toast, notifiche e grafico su PNG
+    tests/               collaudo della logica (Mono, run-tests.sh), prova da capo a fondo del controllo remoto con un
+                         server Telegram finto (run-remote-e2e.sh); render-preview.sh disegna toast, notifiche e grafico su PNG
 
 ## Sviluppo con l'AI
 Questo progetto è stato sviluppato con l'assistenza di Claude (Anthropic): codice, test, script che genera la
