@@ -65,7 +65,7 @@ namespace WinUsage
             head.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
             Label title = new Label();
-            title.Text = "Tempo di utilizzo per giorno (standby e schermo bloccato esclusi)";
+            title.Text = L.T("Tempo di utilizzo per giorno (standby e schermo bloccato esclusi)", "Usage time per day (standby and locked screen excluded)");
             title.Font = boldFont;
             title.AutoSize = true;
             title.Anchor = AnchorStyles.Left;
@@ -77,11 +77,11 @@ namespace WinUsage
             period.WrapContents = false;
             period.Anchor = AnchorStyles.Right;
             Label pl = new Label();
-            pl.Text = "Periodo:";
+            pl.Text = L.T("Periodo:", "Period:");
             pl.AutoSize = true;
             pl.Margin = new Padding(0, 6, 6, 0);
-            rb7.Text = "7 giorni";
-            rb30.Text = "30 giorni";
+            rb7.Text = L.T("7 giorni", "7 days");
+            rb30.Text = L.T("30 giorni", "30 days");
             foreach (RadioButton rb in new RadioButton[] { rb7, rb30 })
             {
                 rb.AutoSize = true;
@@ -115,7 +115,7 @@ namespace WinUsage
             list.FullRowSelect = true;
             list.GridLines = true;
             list.HeaderStyle = ColumnHeaderStyle.Nonclickable;
-            list.Columns.Add("Giorno", 230);
+            list.Columns.Add(L.T("Giorno", "Day"), 230);
             for (int t = 0; t < TimerIds.Count; t++)
             {
                 ColumnHeader h = list.Columns.Add(TimerIds.Labels[t], 100);
@@ -150,7 +150,7 @@ namespace WinUsage
 
         private void LoadData(bool scrollToTop)
         {
-            Text = "WinUsage - Storico degli ultimi " + days + " giorni";
+            Text = L.T("WinUsage - Storico degli ultimi " + days + " giorni", "WinUsage - History of the last " + days + " days");
 
             double[] live = new double[TimerIds.Count];
             for (int t = 0; t < TimerIds.Count; t++) live[t] = tracker.Today(t);
@@ -160,9 +160,9 @@ namespace WinUsage
 
             list.BeginUpdate();
             list.Items.Clear();
-            ListViewItem total = new ListViewItem("Totale " + days + " giorni");
-            ListViewItem avg = new ListViewItem("Media al giorno (" + days + " giorni)");
-            ListViewItem avgUsed = new ListViewItem("Media nei giorni di utilizzo");
+            ListViewItem total = new ListViewItem(L.T("Totale " + days + " giorni", "Total " + days + " days"));
+            ListViewItem avg = new ListViewItem(L.T("Media al giorno (" + days + " giorni)", "Daily average (" + days + " days)"));
+            ListViewItem avgUsed = new ListViewItem(L.T("Media nei giorni di utilizzo", "Average on days of use"));
             for (int t = 0; t < TimerIds.Count; t++)
             {
                 total.SubItems.Add(Fmt.Compact(data.Total(t)));
@@ -186,8 +186,10 @@ namespace WinUsage
             if (top > 0 && top < list.Items.Count) list.TopItem = list.Items[top];
 
             int used = data.DaysWithUsage();
-            summary.Text = "Giorni con utilizzo: " + used + " su " + days +
-                ".  La linea tratteggiata è la media del timer Sistema nei giorni di utilizzo.";
+            summary.Text = L.T("Giorni con utilizzo: " + used + " su " + days +
+                               ".  La linea tratteggiata è la media del timer Sistema nei giorni di utilizzo.",
+                               "Days with use: " + used + " of " + days +
+                               ".  The dashed line is the average of the System timer on days of use.");
 
             chart.Invalidate();
         }

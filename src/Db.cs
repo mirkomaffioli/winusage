@@ -62,9 +62,9 @@ namespace WinUsage
             int rc = sqlite3_open16(file, out handle);
             if (rc != 0)
             {
-                string msg = handle != IntPtr.Zero ? ErrMsg() : "errore " + rc;
+                string msg = handle != IntPtr.Zero ? ErrMsg() : L.T("errore ", "error ") + rc;
                 if (handle != IntPtr.Zero) { sqlite3_close(handle); handle = IntPtr.Zero; }
-                throw new InvalidOperationException("Impossibile aprire il database: " + msg);
+                throw new InvalidOperationException(L.T("Impossibile aprire il database: ", "Cannot open the database: ") + msg);
             }
             sqlite3_busy_timeout(handle, 5000);
         }
@@ -72,14 +72,14 @@ namespace WinUsage
         private string ErrMsg()
         {
             IntPtr p = sqlite3_errmsg16(handle);
-            return p == IntPtr.Zero ? "errore sconosciuto" : Marshal.PtrToStringUni(p);
+            return p == IntPtr.Zero ? L.T("errore sconosciuto", "unknown error") : Marshal.PtrToStringUni(p);
         }
 
         private IntPtr Prepare(string sql, object[] args)
         {
             IntPtr stmt;
             int rc = sqlite3_prepare16_v2(handle, sql, -1, out stmt, IntPtr.Zero);
-            if (rc != 0) throw new InvalidOperationException("SQL non valido (" + ErrMsg() + "): " + sql);
+            if (rc != 0) throw new InvalidOperationException(L.T("SQL non valido (", "Invalid SQL (") + ErrMsg() + "): " + sql);
             try
             {
                 for (int i = 0; args != null && i < args.Length; i++)
@@ -93,7 +93,7 @@ namespace WinUsage
                     else if (a is bool) brc = sqlite3_bind_int64(stmt, idx, ((bool)a) ? 1 : 0);
                     else if (a is double) brc = sqlite3_bind_double(stmt, idx, (double)a);
                     else brc = sqlite3_bind_text16(stmt, idx, Convert.ToString(a), -1, SQLITE_TRANSIENT);
-                    if (brc != 0) throw new InvalidOperationException("Bind fallito: " + ErrMsg());
+                    if (brc != 0) throw new InvalidOperationException(L.T("Bind fallito: ", "Bind failed: ") + ErrMsg());
                 }
             }
             catch
@@ -112,7 +112,7 @@ namespace WinUsage
             {
                 int rc;
                 do { rc = sqlite3_step(stmt); } while (rc == SQLITE_ROW);
-                if (rc != SQLITE_DONE) throw new InvalidOperationException("Esecuzione fallita: " + ErrMsg());
+                if (rc != SQLITE_DONE) throw new InvalidOperationException(L.T("Esecuzione fallita: ", "Execution failed: ") + ErrMsg());
             }
             finally { sqlite3_finalize(stmt); }
         }
@@ -129,7 +129,7 @@ namespace WinUsage
                 {
                     int rc = sqlite3_step(stmt);
                     if (rc == SQLITE_DONE) break;
-                    if (rc != SQLITE_ROW) throw new InvalidOperationException("Lettura fallita: " + ErrMsg());
+                    if (rc != SQLITE_ROW) throw new InvalidOperationException(L.T("Lettura fallita: ", "Read failed: ") + ErrMsg());
                     object[] row = new object[cols];
                     for (int c = 0; c < cols; c++)
                     {

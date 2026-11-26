@@ -29,16 +29,41 @@ namespace WinUsage
         private readonly RemoteController controller;
 
         // rete
-        private TelegramApi api;
-        private Thread pollThread;
-        private volatile bool pollRunning;
-        private readonly AutoResetEvent pollWake = new AutoResetEvent(false);
+        private PollWorker poll;                     // lettura attuale (null = ferma); usata solo nel thread dell'interfaccia
         private readonly BlockingCollection<OutItem> sendQueue = new BlockingCollection<OutItem>();
         private readonly Thread sendThread;
+        private TelegramApi sendApi;                 // solo il thread di invio
+        private readonly AutoResetEvent sendWake = new AutoResetEvent(false);   // rete tornata: gli invii riprovano subito
         private readonly ManualResetEvent disposing = new ManualResetEvent(false);
         private DateTime lastConflictAlertUtc = DateTime.MinValue;
-        private volatile bool pollKicked;            // richiesta interrotta apposta: si riparte subito, senza attesa
         private DateTime lastTickUtc = DateTime.MinValue;
+        // update già elaborati: durante un riavvio della lettura lo stesso messaggio può arrivare due volte
+        private readonly HashSet<long> seenUpdates = new HashSet<long>();
+        private readonly Queue<long> seenOrder = new Queue<long>();
+        private const int SeenUpdatesMax = 1000;
+
+        /// <summary>
+        /// Un thread di lettura con il suo stato. Fermato, non legge più e non conferma nulla a Telegram anche se in quel
+        /// momento non si è fatto interrompere: nella 1.6.0 il flag era uno solo per tutti i thread e il riavvio lo rimetteva
+        /// a true, così un thread vecchio non uscito in tempo restava vivo accanto al nuovo e i messaggi letti da lui
+        /// venivano confermati e poi scartati.
+        /// </summary>
+        private sealed class PollWorker
+        {
+            public readonly TelegramApi Api;
+            public readonly string Token;
+            public readonly AutoResetEvent Wake = new AutoResetEvent(false);
+            public readonly DateTime StartedUtc = DateTime.UtcNow;
+            public volatile bool Stopped;
+            public volatile bool Kicked;      // lettura interrotta apposta: si riparte subito, senza attesa né errore nel log
+            public Thread Thread;
+
+            public PollWorker(string token)
+            {
+                Token = token;
+                Api = new TelegramApi(token);
+            }
+        }
 
         // stato del PC
         private bool locked, disconnected;
@@ -69,6 +94,8 @@ namespace WinUsage
             public string Text;
             public byte[] Data;
             public bool AsDocument;
+            public string Caption;           // immagini: didascalia (foto della webcam)
+            public string FileName = "screenshot";
             public long MessageId;
             public long OutboxId = -1;       // > 0: messaggio persistente (riprovato finché non parte)
             public DateTime CreatedUtc = DateTime.UtcNow;
@@ -124,8 +151,8 @@ namespace WinUsage
         public void Start()
         {
             if (damaged)
-                SecurityAlert("La configurazione del controllo remoto non si può leggere (modificata o copiata da un altro " +
-                              "utente o PC): il controllo remoto è disattivato. Reimpostalo da Controllo remoto.");
+                SecurityAlert(L.T("La configurazione del controllo remoto non si può leggere (modificata o copiata da un altro ", "The remote control settings cannot be read (changed or copied from another ") +
+                              L.T("utente o PC): il controllo remoto è disattivato. Reimpostalo da Controllo remoto.", "user or PC): remote control is off. Set it up again from Remote control."));
             RestartPolling();
             if (!Active) return;
 
@@ -171,7 +198,12 @@ namespace WinUsage
             NotifyCenter.Sounds = settings.Sounds;
             controller.Apply(secrets, settings);
             if (!settings.ChatHistory && (chatForm == null || chatForm.IsDisposed)) chatHistory.Clear();
-            if (tokenChanged) store.Offset = 0;
+            if (tokenChanged)
+            {
+                store.Offset = 0;
+                seenUpdates.Clear();
+                seenOrder.Clear();
+            }
             RestartPolling();
             RaiseStateChanged();
         }
@@ -180,7 +212,7 @@ namespace WinUsage
         public string StartPairing()
         {
             string code = controller.StartPairing(DateTime.UtcNow);
-            if (pollThread == null) RestartPolling();
+            if (poll == null) RestartPolling();
             return code;
         }
 
@@ -198,14 +230,14 @@ namespace WinUsage
             PairedPhone p = secrets.Find(phoneId);
             if (p == null) return;
             string name = p.Label;
-            if (Listening) SendText(phoneId, "Questo telefono non è più abbinato a " + PowerMessages.PcName + ".");
+            if (Listening) SendText(phoneId, L.T("Questo telefono non è più abbinato a ", "This phone is no longer paired with ") + PowerMessages.PcName + ".");
             secrets.Phones.Remove(p);
             secrets.Save(storage);
             controller.Apply(secrets, settings);
-            Audit(0, "(abbinamento)", "telefono rimosso: " + name);
+            Audit(0, L.T("(abbinamento)", "(pairing)"), L.T("telefono rimosso: ", "phone removed: ") + name);
             if (secrets.Paired)
             {
-                if (Listening) Broadcast("📱 " + name + " non è più abbinato a " + PowerMessages.PcName + ".", 0);
+                if (Listening) Broadcast("📱 " + name + L.T(" non è più abbinato a ", " is no longer paired with ") + PowerMessages.PcName + ".", 0);
                 if (chatForm != null && !chatForm.IsDisposed) chatForm.SetPhones(ChatTitle(), ChatGroupNames());
             }
             else
@@ -223,7 +255,7 @@ namespace WinUsage
             {
                 string user = null, error = null;
                 try { user = new TelegramApi(token).GetMeUsername(); }
-                catch (TelegramException ex) { error = ex.Unauthorized ? "Token non valido." : ex.Message; }
+                catch (TelegramException ex) { error = ex.Unauthorized ? L.T("Token non valido.", "Invalid token.") : ex.Message; }
                 catch (Exception ex) { error = TelegramApi.Redact(ex.Message, token); }
                 if (error != null) Log.Write("Verifica del token non riuscita: " + error);
                 Post(delegate { done(user, error); });
@@ -236,31 +268,32 @@ namespace WinUsage
         {
             StopPolling();
             if (!Listening) return;
-            api = new TelegramApi(secrets.Token);
-            pollRunning = true;
-            pollThread = new Thread(PollLoop);
-            pollThread.IsBackground = true;
-            pollThread.Name = "WinUsage lettura Telegram";
-            pollThread.Start(new object[] { api, store.Offset });
+            PollWorker w = new PollWorker(secrets.Token);
+            long offset = store.Offset;
+            w.Thread = new Thread(delegate() { PollLoop(w, offset); });
+            w.Thread.IsBackground = true;
+            w.Thread.Name = "WinUsage lettura Telegram";
+            poll = w;
+            w.Thread.Start();
         }
 
         private void StopPolling()
         {
-            pollRunning = false;
-            pollWake.Set();
-            if (api != null) api.Abort();
-            if (pollThread != null) { pollThread.Join(2000); pollThread = null; }
-            api = null;   // gli invii usano il token attuale; le letture in ritardo vengono ignorate
+            PollWorker w = poll;
+            poll = null;
+            if (w == null) return;
+            w.Stopped = true;
+            w.Api.Close();         // interrompe la lettura in corso e rifiuta le prossime
+            w.Wake.Set();
+            w.Thread.Join(2000);   // di solito esce subito; se no esce da solo, senza più leggere né confermare nulla
         }
 
-        private void PollLoop(object state)
+        private void PollLoop(PollWorker w, long offset)
         {
-            object[] st = (object[])state;
-            TelegramApi a = (TelegramApi)st[0];
-            long offset = (long)st[1];
+            TelegramApi a = w.Api;
             int backoff = 1;
             bool webhookChecked = false;
-            while (pollRunning)
+            while (!w.Stopped)
             {
                 try
                 {
@@ -268,12 +301,13 @@ namespace WinUsage
                     {
                         string url = a.GetWebhookUrl();
                         webhookChecked = true;
+                        if (w.Stopped) return;
                         if (url.Length > 0)
                         {
                             Post(delegate
                             {
-                                SecurityAlert("Sul bot è impostato un webhook che WinUsage non usa: qualcuno potrebbe avere il token. " +
-                                              "Revoca il token da @BotFather (/revoke) e inserisci quello nuovo.");
+                                SecurityAlert(L.T("Sul bot è impostato un webhook che WinUsage non usa: qualcuno potrebbe avere il token. ", "A webhook WinUsage does not use is set on the bot: someone may have the token. ") +
+                                              L.T("Revoca il token da @BotFather (/revoke) e inserisci quello nuovo.", "Revoke the token from @BotFather (/revoke) and enter the new one."));
                             });
                             return;
                         }
@@ -282,80 +316,113 @@ namespace WinUsage
                     // 25 secondi: molti router e operatori chiudono senza avvisare le connessioni ferme da più di 30-60 s,
                     // e una lettura "appesa" su una connessione morta faceva arrivare i comandi con minuti di ritardo.
                     UpdateBatch b = a.GetUpdates(offset, 25);
+                    // Fermato durante l'attesa: niente elaborazione e soprattutto nessuna lettura con l'offset nuovo, che
+                    // confermerebbe a Telegram messaggi mai elaborati. Li rilegge il thread che lo sostituisce.
+                    if (w.Stopped) return;
+                    w.Kicked = false;
                     backoff = 1;
                     if (b.NextOffset != offset)
                     {
                         long next = b.NextOffset;
                         List<IncomingMessage> msgs = b.Messages;
                         offset = next;
-                        Post(delegate
-                        {
-                            if (a != api) return;   // configurazione cambiata nel frattempo
-                            store.Offset = next;
-                            foreach (IncomingMessage m in msgs)
-                            {
-                                try { controller.Process(m, a.ServerNowUtc()); }
-                                catch (Exception ex) { Log.Write(ex); }
-                            }
-                        });
+                        Post(delegate { Deliver(w, msgs, next); });
                     }
                 }
                 catch (TelegramException ex)
                 {
-                    if (!pollRunning) return;
-                    if (pollKicked) { pollKicked = false; backoff = 1; continue; }
+                    if (w.Stopped) return;
+                    if (w.Kicked) { w.Kicked = false; backoff = 1; continue; }
                     if (ex.Unauthorized)
                     {
-                        Post(delegate { SecurityAlert("Telegram rifiuta il token del bot (revocato o sbagliato): il controllo remoto è fermo."); });
+                        Post(delegate { SecurityAlert(L.T("Telegram rifiuta il token del bot (revocato o sbagliato): il controllo remoto è fermo.", "Telegram rejects the bot token (revoked or wrong): remote control is stopped.")); });
                         return;
                     }
                     if (ex.Conflict)
                     {
+                        // Appena dopo un riavvio della lettura il 409 può venire dalla lettura chiusa di questa stessa app, se la
+                        // sua richiesta era già partita e non si è fatta interrompere: si riprova tra un secondo, senza allarme.
+                        if ((DateTime.UtcNow - w.StartedUtc).TotalSeconds < 15)
+                        {
+                            Log.Write("Telegram (lettura): conflitto subito dopo il riavvio della lettura, si riprova");
+                            Wait(w, 1000);
+                            continue;
+                        }
                         Post(delegate
                         {
                             if ((DateTime.UtcNow - lastConflictAlertUtc).TotalHours < 1) return;
                             lastConflictAlertUtc = DateTime.UtcNow;
-                            const string text = "Un altro programma sta leggendo i messaggi del bot con lo stesso token: " +
-                                                "possibile token compromesso, oppure WinUsage configurato con questo bot su un altro PC. " +
-                                                "Usa un bot per ogni PC; se non sei stato tu, revoca il token da @BotFather (/revoke).";
+                            string text = L.T("Un altro programma sta leggendo i messaggi del bot con lo stesso token: ", "Another program is reading the bot's messages with the same token: ") +
+                                                L.T("possibile token compromesso, oppure WinUsage configurato con questo bot su un altro PC. ", "the token may be compromised, or WinUsage is set up with this bot on another PC. ") +
+                                                L.T("Usa un bot per ogni PC; se non sei stato tu, revoca il token da @BotFather (/revoke).", "Use one bot per PC; if it was not you, revoke the token from @BotFather (/revoke).");
                             SecurityAlert(text);
                             Broadcast("⚠️ " + text, 0);
                         });
-                        Wait(30000);
+                        Wait(w, 30000);
                     }
                     else
                     {
                         Log.Write("Telegram (lettura): " + ex.Message);
-                        Wait(backoff * 1000);
+                        Wait(w, backoff * 1000);
                         backoff = TelegramApi.NextBackoff(backoff);
                     }
                 }
                 catch (Exception ex)
                 {
-                    if (!pollRunning) return;
-                    if (pollKicked) { pollKicked = false; backoff = 1; continue; }
-                    Log.Write("Telegram (lettura): " + TelegramApi.Redact(ex.Message, secrets.Token));
-                    Wait(backoff * 1000);
+                    if (w.Stopped) return;
+                    if (w.Kicked) { w.Kicked = false; backoff = 1; continue; }
+                    Log.Write("Telegram (lettura): " + TelegramApi.Redact(ex.Message, w.Token));
+                    Wait(w, backoff * 1000);
                     backoff = TelegramApi.NextBackoff(backoff);
                 }
             }
         }
 
-        private void Wait(int ms)
+        private static void Wait(PollWorker w, int ms)
         {
-            pollWake.WaitOne(ms);
+            w.Wake.WaitOne(ms);
         }
 
         /// <summary>
-        /// Interrompe la lettura in corso e ne fa partire subito una nuova: dopo un risveglio, uno sblocco, un cambio di rete o
-        /// un periodo in cui l'app è rimasta ferma, la connessione aperta può essere morta senza che nessuno lo sappia.
+        /// Messaggi letti da un thread di lettura, nel thread dell'interfaccia. Quelli letti dal thread appena sostituito non
+        /// si scartano più (nella 1.6.0 andavano persi: quel thread li aveva già confermati a Telegram); un messaggio letto due
+        /// volte durante il cambio si elabora una volta sola.
+        /// </summary>
+        private void Deliver(PollWorker w, List<IncomingMessage> msgs, long next)
+        {
+            if (w.Token != secrets.Token) return;      // letti con il token di prima: sono di un altro bot
+            store.Offset = next;
+            foreach (IncomingMessage m in msgs)
+            {
+                if (!Listening) break;                  // /stop o controllo remoto spento a metà del gruppo
+                if (!FirstTime(m.UpdateId)) continue;   // già elaborato
+                try { controller.Process(m, w.Api.ServerNowUtc()); }
+                catch (Exception ex) { Log.Write(ex); }
+            }
+        }
+
+        private bool FirstTime(long updateId)
+        {
+            if (!seenUpdates.Add(updateId)) return false;
+            seenOrder.Enqueue(updateId);
+            while (seenOrder.Count > SeenUpdatesMax) seenUpdates.Remove(seenOrder.Dequeue());
+            return true;
+        }
+
+        /// <summary>
+        /// Interrompe la lettura in corso e ne fa partire subito una nuova, su una connessione nuova: dopo un risveglio, uno
+        /// sblocco, un cambio di rete o un periodo in cui l'app è rimasta ferma, la connessione aperta può essere morta senza
+        /// che nessuno lo sappia. Anche gli invii in attesa di riprovare ripartono subito.
         /// </summary>
         private void KickPolling(string why)
         {
-            if (!Listening || pollThread == null || api == null) return;
-            pollKicked = true;
-            api.Abort();
-            pollWake.Set();
+            sendWake.Set();
+            PollWorker w = poll;
+            if (!Listening || w == null) return;
+            TelegramApi.NewConnections();
+            w.Kicked = true;
+            w.Api.Abort();
+            w.Wake.Set();
         }
 
         // ---- invio ----
@@ -384,6 +451,15 @@ namespace WinUsage
             Enqueue(it);
         }
 
+        /// <summary>Client per gli invii, con il token attuale (solo il thread di invio). La lettura ha il suo.</summary>
+        private TelegramApi SendApi()
+        {
+            string token = secrets.Token;
+            if (string.IsNullOrEmpty(token)) return null;
+            if (sendApi == null || sendApi.Token != token) sendApi = new TelegramApi(token);
+            return sendApi;
+        }
+
         private void SendLoop()
         {
             try
@@ -392,13 +468,13 @@ namespace WinUsage
                 {
                     while (true)
                     {
-                        TelegramApi a = api ?? (secrets.HasToken ? new TelegramApi(secrets.Token) : null);
+                        TelegramApi a = SendApi();
                         if (a == null || it.ChatId == 0) break;
                         try
                         {
                             long id = 0;
                             if (it.Type == 0) id = a.SendMessage(it.ChatId, it.Text, 30000);
-                            else if (it.Type == 1) id = a.SendImage(it.ChatId, it.Data, it.AsDocument, null);
+                            else if (it.Type == 1) id = a.SendImage(it.ChatId, it.Data, it.AsDocument, it.Caption, it.FileName);
                             else a.DeleteMessage(it.ChatId, it.MessageId);
                             OutItem done = it;
                             long sentId = id;
@@ -422,15 +498,16 @@ namespace WinUsage
                                 break;
                             }
                             it.Attempts++;
-                            bool persistent = it.OutboxId > 0;
-                            if (!persistent && (it.Attempts >= 4 || (DateTime.UtcNow - it.CreatedUtc).TotalMinutes > 3))
+                            if (SendRetry.GiveUp(it.OutboxId > 0, it.CreatedUtc, DateTime.UtcNow))
                             {
                                 Log.Write("Telegram (invio) abbandonato dopo " + it.Attempts + " tentativi: " + msg);
                                 break;
                             }
-                            // primo nuovo tentativo dopo 1 s (di solito era solo una connessione vecchia chiusa dal server)
-                            int waitS = it.Attempts == 1 ? 1 : Math.Min(300, 5 * it.Attempts * it.Attempts);
-                            if (disposing.WaitOne(waitS * 1000)) return;
+                            if (it.Attempts == 1) Log.Write("Telegram (invio) non riuscito, si riprova: " + msg);
+                            // Attesa breve, interrotta da rete tornata, risveglio o sblocco (KickPolling): i messaggi in coda
+                            // dietro a questo, comprese le risposte ai comandi, non restano fermi per minuti.
+                            int waitMs = SendRetry.DelaySeconds(it.Attempts) * 1000;
+                            if (WaitHandle.WaitAny(new WaitHandle[] { disposing, sendWake }, waitMs) == 0) return;
                         }
                     }
                 }
@@ -509,9 +586,9 @@ namespace WinUsage
                 if (countdown.LateSeconds(nowUtc) > 120 && !PcLocked)
                 {
                     HideCountdownUi();
-                    Audit(0, "(spegnimento)", "annullato: scaduto in ritardo con il PC in uso");
-                    if (Active) Broadcast("Spegnimento annullato: il conto alla rovescia è scaduto mentre il PC era sospeso e ora il PC è in uso.", 0);
-                    ShowCancelled("IL PC ERA SOSPESO");
+                    Audit(0, L.T("(spegnimento)", "(shutdown)"), L.T("annullato: scaduto in ritardo con il PC in uso", "cancelled: expired late with the PC in use"));
+                    if (Active) Broadcast(L.T("Spegnimento annullato: il conto alla rovescia è scaduto mentre il PC era sospeso e ora il PC è in uso.", "Shutdown cancelled: the countdown ran out while the PC was suspended and now the PC is in use."), 0);
+                    ShowCancelled(L.T("IL PC ERA SOSPESO", "THE PC WAS SUSPENDED"));
                 }
                 else OnCountdownExpired(nowUtc);
             }
@@ -530,7 +607,7 @@ namespace WinUsage
             {
                 shutdownIssuedUtc = DateTime.MinValue;
                 RemoteActions.KeepAwake(false);
-                if (Active) Broadcast("⚠️ Spegnimento bloccato da un'applicazione (probabilmente un documento non salvato).", 0);
+                if (Active) Broadcast(L.T("⚠️ Spegnimento bloccato da un'applicazione (probabilmente un documento non salvato).", "⚠️ Shutdown blocked by an app (probably an unsaved document)."), 0);
             }
 
             if ((nowUtc - lastDeleteCheckUtc).TotalSeconds >= 30)
@@ -558,38 +635,37 @@ namespace WinUsage
             if (countdown.CancelForSleep())
             {
                 HideCountdownUi();
-                Audit(0, "(spegnimento)", "annullato: PC in standby");
+                Audit(0, L.T("(spegnimento)", "(shutdown)"), L.T("annullato: PC in standby", "cancelled: PC in standby"));
                 sleepCancelPending = true;
             }
             if (Active && settings.MsgSleep) SendNowOrLater("sleep", "💤 " + PowerMessages.PcName + " in standby " + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow), 2000);
-            if (api != null) api.Abort();
+            KickPolling("standby");   // la connessione aperta non sopravvive allo standby: al risveglio se ne apre una nuova
         }
 
         public void OnResume()
         {
             KickPolling("risveglio");
-            pollWake.Set();
             if (sleepCancelPending)
             {
                 sleepCancelPending = false;
-                if (Active) Broadcast("Spegnimento annullato: il PC è andato in standby durante il conto alla rovescia.", 0);
-                ShowCancelled("IL PC ERA IN STANDBY");
+                if (Active) Broadcast(L.T("Spegnimento annullato: il PC è andato in standby durante il conto alla rovescia.", "Shutdown cancelled: the PC went into standby during the countdown."), 0);
+                ShowCancelled(L.T("IL PC ERA IN STANDBY", "THE PC WAS ASLEEP"));
             }
-            if (Active && settings.MsgSleep) EnqueuePersistent("resume", "☀️ " + PowerMessages.PcName + " ripreso " + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow));
+            if (Active && settings.MsgSleep) EnqueuePersistent("resume", "☀️ " + PowerMessages.PcName + L.T(" ripreso ", " resumed ") + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow));
         }
 
         public void OnLock()
         {
             if (!locked) lockedSinceUtc = DateTime.UtcNow;
             locked = true;
-            if (Active && settings.MsgLock) EnqueuePersistent("lock", "🔒 " + PowerMessages.PcName + " bloccato " + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow));
+            if (Active && settings.MsgLock) EnqueuePersistent("lock", "🔒 " + PowerMessages.PcName + L.T(" bloccato ", " locked ") + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow));
         }
 
         public void OnUnlock()
         {
             locked = false;
             KickPolling("sblocco");
-            if (Active && settings.MsgLock) EnqueuePersistent("unlock", "🔓 " + PowerMessages.PcName + " sbloccato " + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow));
+            if (Active && settings.MsgLock) EnqueuePersistent("unlock", "🔓 " + PowerMessages.PcName + L.T(" sbloccato ", " unlocked ") + RemoteController.When(DateTime.UtcNow, DateTime.UtcNow));
             if (lockedRemotelyUtc > DateTime.MinValue)
             {
                 DateTime at = lockedRemotelyUtc;
@@ -598,9 +674,9 @@ namespace WinUsage
                 {
                     NotifyRequest r = new NotifyRequest();
                     r.Kind = NotifyKind.LockedRemote;
-                    r.Title = "BLOCCATO DAL TELEFONO";
-                    r.Big = "ALLE " + RemoteController.LocalTime(at);
-                    r.Line3 = "BENTORNATO!";
+                    r.Title = L.T("BLOCCATO DAL TELEFONO", "LOCKED BY THE PHONE");
+                    r.Big = L.T("ALLE ", "AT ") + RemoteController.LocalTime(at);
+                    r.Line3 = L.T("BENTORNATO!", "WELCOME BACK!");
                     r.Seconds = 8;
                     r.Tune = 1;
                     NotifyCenter.Show(r);
@@ -625,7 +701,8 @@ namespace WinUsage
         /// <summary>L'utente chiude WinUsage (o l'installer lo aggiorna): il PC resta acceso senza controllo.</summary>
         public void OnAppExit()
         {
-            if (sessionEnding || !Active || !settings.MsgPowerOff) return;
+            // riavvio per il cambio di lingua: torna subito, niente "WinUsage chiuso" ai telefoni
+            if (sessionEnding || Program.RestartRequested || !Active || !settings.MsgPowerOff) return;
             DateTime now = DateTime.UtcNow;
             SendNowOrLater("exit", PowerMessages.AppClosed(now, now), 3000);
         }
@@ -635,17 +712,17 @@ namespace WinUsage
         private void OnCountdownExpired(DateTime nowUtc)
         {
             HideCountdownUi();
-            Audit(0, "(spegnimento)", "conto alla rovescia scaduto");
+            Audit(0, L.T("(spegnimento)", "(shutdown)"), L.T("conto alla rovescia scaduto", "countdown expired"));
             tracker.FlushNow(nowUtc);
             // PC bloccato: nessuno può salvare o rispondere a "un'app impedisce l'arresto", che fermerebbe tutto. Si forza.
             bool force = PcLocked;
-            if (force) Audit(0, "(spegnimento)", "PC bloccato: spegnimento forzato");
+            if (force) Audit(0, L.T("(spegnimento)", "(shutdown)"), L.T("PC bloccato: spegnimento forzato", "PC locked: forced shutdown"));
             if (RemoteActions.PowerOff(force))
             {
                 shutdownIssuedUtc = nowUtc;
                 RemoteActions.KeepAwake(true);   // finché Windows non chiude, il PC non deve addormentarsi
             }
-            else if (Active) Broadcast("⚠️ Windows non ha accettato lo spegnimento.", 0);
+            else if (Active) Broadcast(L.T("⚠️ Windows non ha accettato lo spegnimento.", "⚠️ Windows did not accept the shutdown."), 0);
         }
 
         private void ShowCountdownNotice(int seconds)
@@ -654,9 +731,9 @@ namespace WinUsage
             NotifyCenter.Remove(NotifyKind.Countdown);
             NotifyRequest r = new NotifyRequest();
             r.Kind = NotifyKind.Countdown;
-            r.Title = "SPEGNIMENTO DA REMOTO";
-            r.Button = "ANNULLA";
-            r.Line3 = "SALVA IL LAVORO!";
+            r.Title = L.T("SPEGNIMENTO DA REMOTO", "REMOTE SHUTDOWN");
+            r.Button = L.T("ANNULLA", "CANCEL");
+            r.Line3 = L.T("SALVA IL LAVORO!", "SAVE YOUR WORK!");
             r.Seconds = seconds;
             r.Priority = 2;
             r.Tune = 3;
@@ -686,17 +763,17 @@ namespace WinUsage
         {
             if (!countdown.Cancel()) return;
             HideCountdownUi();
-            Audit(0, "(annullato dal PC)", "spegnimento annullato");
-            if (Active) Broadcast("Spegnimento annullato dal PC alle " + RemoteController.LocalTime(DateTime.UtcNow) + ".", 0);
-            ShowCancelled("ANNULLATO DA QUI");
+            Audit(0, L.T("(annullato dal PC)", "(cancelled on the PC)"), L.T("spegnimento annullato", "shutdown cancelled"));
+            if (Active) Broadcast(L.T("Spegnimento annullato dal PC alle ", "Shutdown cancelled on the PC at ") + RemoteController.LocalTime(DateTime.UtcNow) + ".", 0);
+            ShowCancelled(L.T("ANNULLATO DA QUI", "CANCELLED HERE"));
         }
 
         private void ShowCancelled(string line)
         {
             NotifyRequest r = new NotifyRequest();
             r.Kind = NotifyKind.Cancelled;
-            r.Title = "SPEGNIMENTO ANNULLATO";
-            r.Big = "OSSIGENO OK";
+            r.Title = L.T("SPEGNIMENTO ANNULLATO", "SHUTDOWN CANCELLED");
+            r.Big = L.T("OSSIGENO OK", "OXYGEN OK");
             r.Line3 = line;
             r.Seconds = 6;
             r.Tune = 5;
@@ -726,9 +803,9 @@ namespace WinUsage
                     // Chiusa da chi sta al PC (CHIUDI o X): il telefono lo sa e non scrive a vuoto.
                     if (!chatClosingSilently && e.CloseReason == CloseReason.UserClosing && Active)
                     {
-                        Broadcast("💬 Chat chiusa sul PC alle " + RemoteController.LocalTime(DateTime.UtcNow) +
-                                                 ". I prossimi messaggi arriveranno come notifica.", 0);
-                        Audit(0, "(chat dal PC)", "chat chiusa");
+                        Broadcast(L.T("💬 Chat chiusa sul PC alle ", "💬 Chat closed on the PC at ") + RemoteController.LocalTime(DateTime.UtcNow) +
+                                                 L.T(". I prossimi messaggi arriveranno come notifica.", ". Next messages will arrive as a notification."), 0);
+                        Audit(0, L.T("(chat dal PC)", "(chat from the PC)"), L.T("chat chiusa", "chat closed"));
                     }
                 };
             }
@@ -756,15 +833,15 @@ namespace WinUsage
             if (!settings.ChatHistory) chatHistory.Clear();
             NotifyCenter.Remove(NotifyKind.ChatMessage);
             if (!Active) return;
-            Broadcast("💬 Chat rifiutata sul PC: chi è al computer non vuole chattare adesso.", 0);
-            Audit(0, "(chat dal PC)", "chat rifiutata");
+            Broadcast(L.T("💬 Chat rifiutata sul PC: chi è al computer non vuole chattare adesso.", "💬 Chat refused on the PC: whoever is at the computer does not want to chat now."), 0);
+            Audit(0, L.T("(chat dal PC)", "(chat from the PC)"), L.T("chat rifiutata", "chat refused"));
         }
 
         /// <summary>Nome per l'intestazione della chat: il telefono, o "tutti i telefoni" se sono più d'uno.</summary>
         private string ChatTitle()
         {
             if (secrets.Phones.Count == 1) return secrets.Phones[0].Label;
-            return "TUTTI I " + secrets.Phones.Count + " TELEFONI";   // niente parentesi: il font pixel non le ha
+            return L.T("TUTTI I ", "ALL ") + secrets.Phones.Count + L.T(" TELEFONI", " PHONES");   // niente parentesi: il font pixel non le ha
         }
 
         /// <summary>Nomi dei telefoni se la chat è di gruppo, altrimenti null.</summary>
@@ -779,7 +856,7 @@ namespace WinUsage
             if (!Active || string.IsNullOrEmpty(text)) return false;
             Broadcast("💬 " + text, 0);
             chatHistory.Add(text, true, DateTime.UtcNow);
-            Audit(0, "(chat dal PC)", text.Length + " caratteri");
+            Audit(0, L.T("(chat dal PC)", "(chat from the PC)"), text.Length + L.T(" caratteri", " characters"));
             return true;
         }
 
@@ -807,6 +884,8 @@ namespace WinUsage
             it.ChatId = chatId;
             it.Data = shot.Data;
             it.AsDocument = shot.Png;
+            it.Caption = shot.Caption;
+            if (!string.IsNullOrEmpty(shot.Name)) it.FileName = shot.Name;
             int minutes = settings.ScreenshotDeleteMinutes;
             if (minutes > 0) it.OnSent = delegate(long id) { store.AddPendingDelete(chatId, id, DateTime.UtcNow.AddMinutes(minutes)); };
             Enqueue(it);
@@ -817,10 +896,64 @@ namespace WinUsage
             if (disconnected)
             {
                 ScreenshotResult r = new ScreenshotResult();
-                r.Error = "👥 Un altro utente sta usando il PC: lo screenshot non è possibile.";
+                r.Error = L.T("👥 Un altro utente sta usando il PC: lo screenshot non è possibile.", "👥 Another user is using the PC: a screenshot is not possible.");
                 return r;
             }
             return RemoteActions.Capture(monitor, hd, secrets.ExclusionSet());
+        }
+
+        /// <summary>Tempo massimo per una foto: oltre, il telefono riceve un errore (la fotocamera non risponde).</summary>
+        internal static int PhotoTimeoutSeconds = 25;
+
+        /// <summary>Da dove viene la foto: la webcam, o una finta nella prova da capo a fondo.</summary>
+        internal static Func<int, ScreenshotResult> PhotoSource = Webcam.Capture;
+
+        /// <summary>
+        /// Foto dalla webcam in un thread a parte (Media Foundation blocca per qualche secondo e l'interfaccia non deve
+        /// fermarsi); <paramref name="done"/> torna nel thread dell'interfaccia, una volta sola, anche se la fotocamera non
+        /// risponde entro <see cref="PhotoTimeoutSeconds"/> secondi.
+        /// </summary>
+        public void CapturePhoto(int camera, Action<ScreenshotResult> done)
+        {
+            if (disconnected)
+            {
+                ScreenshotResult r = new ScreenshotResult();
+                r.Error = L.T("👥 Un altro utente sta usando il PC: la foto non è possibile.", "👥 Another user is using the PC: a photo is not possible.");
+                done(r);
+                return;
+            }
+
+            bool finished = false;
+            System.Windows.Forms.Timer timeout = new System.Windows.Forms.Timer();
+            Action<ScreenshotResult> finish = delegate(ScreenshotResult res)
+            {
+                if (finished) return;
+                finished = true;
+                timeout.Stop();
+                timeout.Dispose();
+                done(res);
+            };
+            timeout.Interval = PhotoTimeoutSeconds * 1000;
+            timeout.Tick += delegate
+            {
+                Log.Write("Webcam: nessuna risposta in " + PhotoTimeoutSeconds + " s");
+                ScreenshotResult r = new ScreenshotResult();
+                r.Error = L.T("📷 La fotocamera non risponde: riprova più tardi.", "📷 The camera is not responding: try again later.");
+                finish(r);
+            };
+            timeout.Start();
+
+            Thread t = new Thread(delegate()
+            {
+                ScreenshotResult res;
+                try { res = PhotoSource(camera); }
+                catch (Exception ex) { Log.Write(ex); res = new ScreenshotResult(); res.Error = L.T("📷 Foto non riuscita.", "📷 Photo failed."); }
+                Post(delegate { finish(res); });
+            });
+            t.IsBackground = true;
+            t.Name = "WinUsage webcam";
+            t.SetApartmentState(ApartmentState.MTA);
+            t.Start();
         }
 
         public ForegroundInfo GetForegroundInfo()
@@ -867,7 +1000,7 @@ namespace WinUsage
         {
             if (!countdown.Cancel()) return false;
             HideCountdownUi();
-            if (fromRemote) ShowCancelled("DAL TELEFONO");
+            if (fromRemote) ShowCancelled(L.T("DAL TELEFONO", "FROM THE PHONE"));
             return true;
         }
 
@@ -880,22 +1013,22 @@ namespace WinUsage
             if (chatForm != null && !chatForm.IsDisposed)
             {
                 chatForm.ShowChat(false);
-                if (Active) SendText(fromId, "💬 La chat è già aperta sul PC.");
+                if (Active) SendText(fromId, L.T("💬 La chat è già aperta sul PC.", "💬 The chat is already open on the PC."));
                 return;
             }
             // Non si apre di colpo una finestra mentre qualcuno lavora o gioca: notifica con APRI CHAT.
             NotifyRequest r = new NotifyRequest();
             r.Kind = NotifyKind.ChatRequest;
-            r.Title = "IL TELEFONO VUOLE CHATTARE";
+            r.Title = L.T("IL TELEFONO VUOLE CHATTARE", "THE PHONE WANTS TO CHAT");
             r.Big = "CHAT";
             if (secrets.Phones.Count > 1)
             {
                 // con più telefoni si dice chi chiede (se il font pixel ha le lettere del nome)
                 string who = secrets.NameOf(fromId).ToUpperInvariant();
-                r.Line3 = PixelFont.CanDraw(who) ? "DA " + who : "DA UN TELEFONO";
+                r.Line3 = PixelFont.CanDraw(who) ? L.T("DA ", "FROM ") + who : L.T("DA UN TELEFONO", "FROM A PHONE");
             }
-            r.Button = "APRI CHAT";
-            r.Button2 = "CHIUDI";
+            r.Button = L.T("APRI CHAT", "OPEN CHAT");
+            r.Button2 = L.T("CHIUDI", "CLOSE");
             r.Seconds = 20;
             r.Priority = 1;
             r.Tune = 2;
@@ -903,7 +1036,7 @@ namespace WinUsage
             {
                 bool wasOpen = chatForm != null && !chatForm.IsDisposed;
                 ShowChat(true);
-                if (!wasOpen && Active) Broadcast("💬 Chat aperta sul PC: puoi scrivere.", 0);
+                if (!wasOpen && Active) Broadcast(L.T("💬 Chat aperta sul PC: puoi scrivere.", "💬 Chat open on the PC: you can write."), 0);
             };
             r.OnButton = accept;
             r.OnClick = accept;
@@ -911,7 +1044,7 @@ namespace WinUsage
             r.OnTimeout = delegate
             {
                 if ((chatForm == null || chatForm.IsDisposed) && Active)
-                    SendText(fromId, "💬 Nessuno ha aperto la chat sul PC. I messaggi arriveranno come notifica.");
+                    SendText(fromId, L.T("💬 Nessuno ha aperto la chat sul PC. I messaggi arriveranno come notifica.", "💬 Nobody opened the chat on the PC. Messages will arrive as a notification."));
             };
             NotifyCenter.Remove(NotifyKind.ChatRequest);   // una richiesta sola alla volta
             NotifyCenter.Show(r);
@@ -933,11 +1066,11 @@ namespace WinUsage
             if (!settings.NotifyChat) { ShowChat(false); return; }
             NotifyRequest r = new NotifyRequest();
             r.Kind = NotifyKind.ChatMessage;
-            r.Title = "MESSAGGIO DAL TELEFONO";
+            r.Title = L.T("MESSAGGIO DAL TELEFONO", "MESSAGE FROM THE PHONE");
             r.FreeText = group ? sender + ": " + text : text;
-            r.QuickReplyCue = group ? "Rispondi a tutti..." : "Rispondi...";
-            r.Button = "APRI CHAT";
-            r.Button2 = "CHIUDI";
+            r.QuickReplyCue = group ? L.T("Rispondi a tutti...", "Reply to all...") : L.T("Rispondi...", "Reply...");
+            r.Button = L.T("APRI CHAT", "OPEN CHAT");
+            r.Button2 = L.T("CHIUDI", "CLOSE");
             r.OnButton2 = RefuseChat;
             r.Seconds = 15;   // il tempo di cliccare su "rispondi"; mentre si scrive non sparisce
             r.Priority = 1;
@@ -978,20 +1111,20 @@ namespace WinUsage
                     owner.Size = new Size(1, 1);
                     owner.Show();
                     string others = secrets.Paired
-                        ? "\r\n\r\nSi aggiunge ai telefoni già abbinati (" + secrets.Names() + "): potrà usare tutti i comandi " +
-                          "e leggerà la chat e gli avvisi. Gli altri telefoni riceveranno un avviso."
+                        ? L.T("\r\n\r\nSi aggiunge ai telefoni già abbinati (", "\r\n\r\nIt joins the phones already paired (") + secrets.Names() + L.T("): potrà usare tutti i comandi ", "): it will be able to use all commands ") +
+                          L.T("e leggerà la chat e gli avvisi. Gli altri telefoni riceveranno un avviso.", "and will read the chat and notices. The other phones will get a notice.")
                         : "";
                     ok = MessageBox.Show(owner,
-                        "Abbinare questo account Telegram al controllo remoto di WinUsage?\r\n\r\n" + name + "\r\nid " +
-                        userId.ToString(CultureInfo.InvariantCulture) + others + "\r\n\r\nSe non sei stato tu a chiederlo, rispondi No.",
-                        "WinUsage - Abbinamento", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+                        L.T("Abbinare questo account Telegram al controllo remoto di WinUsage?\r\n\r\n", "Pair this Telegram account with WinUsage remote control?\r\n\r\n") + name + "\r\nid " +
+                        userId.ToString(CultureInfo.InvariantCulture) + others + L.T("\r\n\r\nSe non sei stato tu a chiederlo, rispondi No.", "\r\n\r\nIf you did not ask for it, answer No."),
+                        L.T("WinUsage - Abbinamento", "WinUsage - Pairing"), MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
                 }
                 done(ok);
                 if (ok)
                 {
                     NotifyRequest r = new NotifyRequest();
                     r.Kind = NotifyKind.Paired;
-                    r.Title = "TELEFONO ABBINATO";
+                    r.Title = L.T("TELEFONO ABBINATO", "PHONE PAIRED");
                     r.FreeText = name;
                     r.Seconds = 8;
                     r.Tune = 0;
@@ -1008,19 +1141,30 @@ namespace WinUsage
             {
                 if (!settings.NotifyScreenshot) return;
                 r.Kind = NotifyKind.Screenshot;
-                r.Title = "SCREENSHOT INVIATO";
-                r.Big = "AL TELEFONO";
-                r.Line3 = "ALLE " + RemoteController.LocalTime(DateTime.UtcNow);
+                r.Title = L.T("SCREENSHOT INVIATO", "SCREENSHOT SENT");
+                r.Big = L.T("AL TELEFONO", "TO THE PHONE");
+                r.Line3 = L.T("ALLE ", "AT ") + RemoteController.LocalTime(DateTime.UtcNow);
                 r.Seconds = 5;
+                r.Tune = 1;
+            }
+            else if (kind == "foto")
+            {
+                // chi è davanti al PC sa che è stata scattata una foto (oltre alla luce della webcam)
+                if (!settings.NotifyPhoto) return;
+                r.Kind = NotifyKind.Screenshot;
+                r.Title = L.T("FOTO DALLA WEBCAM", "WEBCAM PHOTO");
+                r.Big = L.T("AL TELEFONO", "TO THE PHONE");
+                r.Line3 = L.T("ALLE ", "AT ") + RemoteController.LocalTime(DateTime.UtcNow);
+                r.Seconds = 6;
                 r.Tune = 1;
             }
             else if (kind == "app")
             {
                 if (!settings.NotifyApp) return;
                 r.Kind = NotifyKind.AppQuery;
-                r.Title = "IL TELEFONO HA CHIESTO";
-                r.Big = "L'APP IN USO";
-                r.Line3 = "ALLE " + RemoteController.LocalTime(DateTime.UtcNow);
+                r.Title = L.T("IL TELEFONO HA CHIESTO", "THE PHONE ASKED FOR");
+                r.Big = L.T("L'APP IN USO", "APP IN USE");
+                r.Line3 = L.T("ALLE ", "AT ") + RemoteController.LocalTime(DateTime.UtcNow);
                 r.Seconds = 4;
                 r.Tune = 1;
             }
@@ -1033,13 +1177,13 @@ namespace WinUsage
             Log.Write("Sicurezza: " + text);
             NotifyRequest r = new NotifyRequest();
             r.Kind = NotifyKind.Security;
-            r.Title = "ATTENZIONE: SICUREZZA";
+            r.Title = L.T("ATTENZIONE: SICUREZZA", "WARNING: SECURITY");
             r.FreeText = text;
             r.Seconds = 0;   // resta finché non si clicca
             r.Priority = 3;
             r.Tune = 3;
             NotifyCenter.Show(r);
-            Audit(0, "(avviso di sicurezza)", text);
+            Audit(0, L.T("(avviso di sicurezza)", "(security alert)"), text);
         }
 
         public void Audit(long senderId, string command, string result)
@@ -1062,16 +1206,16 @@ namespace WinUsage
         {
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
             sb.Append("📊 ").Append(PowerMessages.PcName).Append('\n');
-            sb.Append("In uso da ").Append(Fmt.Long(tracker.Session(TimerIds.System)))
-              .Append(" (acceso ").Append(RemoteController.When(tracker.SessionStartUtc, DateTime.UtcNow)).Append(")\n");
-            sb.Append("Oggi: ");
+            sb.Append(L.T("In uso da ", "In use for ")).Append(Fmt.Long(tracker.Session(TimerIds.System)))
+              .Append(L.T(" (acceso ", " (on ")).Append(RemoteController.When(tracker.SessionStartUtc, DateTime.UtcNow)).Append(")\n");
+            sb.Append(L.T("Oggi: ", "Today: "));
             for (int i = 0; i < TimerIds.Count; i++)
             {
                 if (i > 0) sb.Append(", ");
                 sb.Append(TimerIds.Labels[i]).Append(' ').Append(Fmt.Compact(tracker.Today(i)));
             }
-            if (locked || Probe.UserAway()) sb.Append("\n🔒 PC bloccato");
-            if (secrets.Phones.Count > 1) sb.Append("\n📱 Telefoni abbinati: ").Append(secrets.Phones.Count);
+            if (locked || Probe.UserAway()) sb.Append(L.T("\n🔒 PC bloccato", "\n🔒 PC locked"));
+            if (secrets.Phones.Count > 1) sb.Append(L.T("\n📱 Telefoni abbinati: ", "\n📱 Paired phones: ")).Append(secrets.Phones.Count);
             if (countdown.Active) sb.Append("\n⏻ Spegnimento alle ").Append(countdown.DueUtc.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture));
             return sb.ToString();
         }

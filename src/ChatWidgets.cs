@@ -65,7 +65,7 @@ namespace WinUsage
             DoubleBuffered = true;
             Cursor = Cursors.Hand;
             Width = 34;
-            Text = "Emoji";
+            Text = "Emoji";   // uguale in tutte e due le lingue
             MouseEnter += delegate { hover = true; Invalidate(); };
             MouseLeave += delegate { hover = false; Invalidate(); };
             Click += delegate { Toggle(); };
@@ -179,7 +179,7 @@ namespace WinUsage
                 PixelArt.DrawScaled(g, title, new Rectangle(0, 2, title.Width * 2, title.Height * 2));
             }
             using (Font small = new Font(SystemFonts.MessageBoxFont.FontFamily, 11, GraphicsUnit.Pixel))
-                TextRenderer.DrawText(g, "tutte le altre: Win + .", small, new Rectangle(80, 4, ClientSize.Width - 88, 16),
+                TextRenderer.DrawText(g, L.T("tutte le altre: Win + .", "all the others: Win + ."), small, new Rectangle(80, 4, ClientSize.Width - 88, 16),
                                       Color.FromArgb(124, 200, 240), TextFormatFlags.Right | TextFormatFlags.NoPrefix);
             for (int i = 0; i < EmojiSet.Count; i++)
             {
@@ -217,7 +217,7 @@ namespace WinUsage
 
         private readonly TextBox input = new TextBox();
         private readonly EmojiButton emoji;
-        private readonly PixelButton send = new PixelButton("INVIA");
+        private readonly PixelButton send = new PixelButton(L.T("INVIA", "SEND"));
         private readonly int scale;
         private readonly string cue;
 
@@ -232,7 +232,7 @@ namespace WinUsage
         public QuickReplyBar(int width, int scale, string cue)
         {
             this.scale = scale;
-            this.cue = string.IsNullOrEmpty(cue) ? "Rispondi..." : cue;
+            this.cue = string.IsNullOrEmpty(cue) ? L.T("Rispondi...", "Reply...") : cue;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             TopMost = true;
@@ -304,7 +304,7 @@ namespace WinUsage
             else
             {
                 input.BackColor = Color.FromArgb(255, 214, 200);
-                Cue("Non inviato: controllo remoto non attivo");
+                Cue(L.T("Non inviato: controllo remoto non attivo", "Not sent: remote control is off"));
             }
         }
 

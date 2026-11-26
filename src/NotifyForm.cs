@@ -27,7 +27,7 @@ namespace WinUsage
         public Func<NotifyArt, bool> Update; // a ogni fotogramma; false = chiudi
         public Func<string, bool> QuickReply;  // non null = barra "rispondi" sopra la notifica; false = non inviato
         public string ReplyDraft;            // testo scritto nella barra quando la notifica è stata cliccata
-        public string QuickReplyCue = "Rispondi...";   // testo grigio nella barra (es. "Rispondi a tutti...")
+        public string QuickReplyCue = L.T("Rispondi...", "Reply...");   // testo grigio nella barra (es. "Rispondi a tutti...")
     }
 
     /// <summary>

@@ -307,7 +307,7 @@ namespace WinUsage
                 Color c = s <= 60 && (frame / 5) % 2 == 0 ? Color.FromArgb(255, 120, 100) : Color.FromArgb(255, 214, 90);
                 int scale = time.Length <= 4 ? 2 : 1;   // da 10 minuti in su il tempo non sta nel formato grande
                 PixelFont.DrawShadow(g, time, 15, scale == 2 ? 4 : 8, c, Color.FromArgb(138, 90, 26), scale);
-                NotifyArt.DrawButton(g, CancelRect, "ANNULLA", true);
+                NotifyArt.DrawButton(g, CancelRect, L.T("ANNULLA", "CANCEL"), true);
             }
             return frameBmp;
         }

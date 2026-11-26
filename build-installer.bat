@@ -1,7 +1,8 @@
 @echo off
 rem ------------------------------------------------------------------
 rem  Crea dist\WinUsage-Setup-<versione>.exe
-rem  Richiede NSIS 3 (https://nsis.sourceforge.io) installato.
+rem  Richiede NSIS 3.08 o successivo (https://nsis.sourceforge.io) installato.
+rem  Se la firma e' configurata (sign.bat / sign.env.bat) firma exe, disinstallazione e installer.
 rem ------------------------------------------------------------------
 setlocal
 cd /d "%~dp0"
@@ -14,12 +15,19 @@ call build.bat
 if errorlevel 1 exit /b 1
 
 if not exist dist mkdir dist
+set SIGNDEF=
+call sign.bat --check
+if not errorlevel 1 (
+  call sign.bat bin\WinUsage.exe
+  if errorlevel 1 exit /b 1
+  set SIGNDEF="/DSIGN=%~dp0sign.bat"
+)
 pushd installer
-"%MAKENSIS%" /V2 WinUsage.nsi
+"%MAKENSIS%" /V2 %SIGNDEF% WinUsage.nsi
 if errorlevel 1 (
   popd
   echo Creazione dell'installer fallita. NSIS e' installato?
   exit /b 1
 )
 popd
-echo OK: dist\WinUsage-Setup-1.1.0.exe
+echo OK: installer in dist\

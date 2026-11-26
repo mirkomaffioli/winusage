@@ -3,6 +3,7 @@ rem ------------------------------------------------------------------
 rem  Compila WinUsage con il compilatore C# gia' presente in Windows
 rem  (.NET Framework 4.x). Non serve installare nulla.
 rem  Risultato: bin\WinUsage.exe
+rem  /codepage:65001: i sorgenti sono UTF-8 senza BOM (emoji e accenti nei testi)
 rem ------------------------------------------------------------------
 setlocal
 cd /d "%~dp0"
@@ -16,7 +17,7 @@ if not exist "%CSC%" (
 
 if not exist bin mkdir bin
 
-"%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ /out:bin\WinUsage.exe ^
+"%CSC%" /nologo /codepage:65001 /target:winexe /platform:anycpu /optimize+ /out:bin\WinUsage.exe ^
   /win32icon:app.ico /win32manifest:app.manifest /resource:app.ico,WinUsage.app.ico ^
   /reference:System.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:System.Security.dll ^
   src\*.cs

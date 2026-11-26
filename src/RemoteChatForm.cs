@@ -20,8 +20,8 @@ namespace WinUsage
         private readonly Panel scroller = new Panel();
         private readonly FlowLayoutPanel list = new FlowLayoutPanel();
         private readonly TextBox input = new TextBox();
-        private readonly PixelButton send = new PixelButton("INVIA");
-        private readonly PixelButton close = new PixelButton("CHIUDI");
+        private readonly PixelButton send = new PixelButton(L.T("INVIA", "SEND"));
+        private readonly PixelButton close = new PixelButton(L.T("CHIUDI", "CLOSE"));
         private readonly EmojiButton emoji;
         private string userName;
         private string groupNames;           // null = un telefono solo
@@ -34,9 +34,9 @@ namespace WinUsage
         /// <param name="groupNames">Nomi dei telefoni se sono più d'uno (chat di gruppo), altrimenti null.</param>
         public RemoteChatForm(string userName, Icon icon, bool keepHistory, string groupNames)
         {
-            this.userName = string.IsNullOrEmpty(userName) ? "telefono" : userName;
+            this.userName = string.IsNullOrEmpty(userName) ? L.T("telefono", "phone") : userName;
             this.groupNames = groupNames;
-            Text = "WinUsage - Chat con il telefono";
+            Text = L.T("WinUsage - Chat con il telefono", "WinUsage - Chat with the phone");
             if (icon != null) Icon = icon;
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Font;
@@ -109,10 +109,12 @@ namespace WinUsage
             Controls.Add(header);
 
             AddNote((groupNames != null
-                        ? "Chat con tutti i telefoni abbinati (" + groupNames + "): quello che scrivi arriva a tutti. "
-                        : "Chat solo con " + this.userName + ". ") + (keepHistory
-                ? "I messaggi restano finché WinUsage è aperto (solo in memoria): spariscono al riavvio."
-                : "Nessuna cronologia: i messaggi spariscono alla chiusura."));
+                        ? L.T("Chat con tutti i telefoni abbinati (" + groupNames + "): quello che scrivi arriva a tutti. ",
+                              "Chat with all paired phones (" + groupNames + "): what you write reaches everyone. ")
+                        : L.T("Chat solo con " + this.userName + ". ", "Chat only with " + this.userName + ". ")) + (keepHistory
+                ? L.T("I messaggi restano finché WinUsage è aperto (solo in memoria): spariscono al riavvio.",
+                      "Messages stay while WinUsage is open (in memory only): they disappear on restart.")
+                : L.T("Nessuna cronologia: i messaggi spariscono alla chiusura.", "No history: messages disappear when the window closes.")));
             Shown += delegate { input.Focus(); };
         }
 
@@ -150,10 +152,11 @@ namespace WinUsage
         /// <summary>I telefoni abbinati sono cambiati mentre la chat è aperta.</summary>
         public void SetPhones(string userName, string groupNames)
         {
-            this.userName = string.IsNullOrEmpty(userName) ? "telefono" : userName;
+            this.userName = string.IsNullOrEmpty(userName) ? L.T("telefono", "phone") : userName;
             this.groupNames = groupNames;
             header.SetUser(this.userName, groupNames != null);
-            AddNote(groupNames != null ? "Telefoni nella chat: " + groupNames + "." : "Ora la chat è solo con " + this.userName + ".");
+            AddNote(groupNames != null ? L.T("Telefoni nella chat: ", "Phones in the chat: ") + groupNames + "."
+                                        : L.T("Ora la chat è solo con ", "The chat is now only with ") + this.userName + ".");
         }
 
         /// <summary>Messaggi già scambiati (cronologia), dal più vecchio.</summary>
@@ -187,7 +190,7 @@ namespace WinUsage
                 AddBubble(new ChatBubble(text, true, DateTime.Now, null));
                 input.Clear();
             }
-            else AddNote("Messaggio non inviato: controllo remoto non attivo.");
+            else AddNote(L.T("Messaggio non inviato: controllo remoto non attivo.", "Message not sent: remote control is off."));
         }
 
         private void AddNote(string text)
@@ -263,9 +266,9 @@ namespace WinUsage
                         g.InterpolationMode = InterpolationMode.NearestNeighbor;
                         g.PixelOffsetMode = PixelOffsetMode.Half;
                         g.DrawImage(shell, new Rectangle(6, 7, 16, 16), 0, 0, 16, 16, GraphicsUnit.Pixel);
-                        PixelFont.DrawShadow(g, group ? "CHAT CON I TELEFONI" : "CHAT CON IL TELEFONO", 28, 7, Color.FromArgb(255, 214, 90), Color.FromArgb(138, 90, 26), 1);
+                        PixelFont.DrawShadow(g, group ? L.T("CHAT CON I TELEFONI", "CHAT WITH THE PHONES") : L.T("CHAT CON IL TELEFONO", "CHAT WITH THE PHONE"), 28, 7, Color.FromArgb(255, 214, 90), Color.FromArgb(138, 90, 26), 1);
                         string shown = user.ToUpperInvariant();
-                        PixelFont.DrawShadow(g, NotifyArt.Fit(PixelFont.CanDraw(shown) ? shown : "TELEFONO ABBINATO", lw - 34), 28, 17,
+                        PixelFont.DrawShadow(g, NotifyArt.Fit(PixelFont.CanDraw(shown) ? shown : L.T("TELEFONO ABBINATO", "PAIRED PHONE"), lw - 34), 28, 17,
                                              Color.FromArgb(190, 235, 255), Color.FromArgb(8, 24, 52), 1);
                     }
                 }

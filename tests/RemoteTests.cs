@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 // Collaudo del controllo remoto (logica, senza rete né finestre): vedi run-tests.sh.
 namespace WinUsage.Tests
@@ -30,7 +31,29 @@ namespace WinUsage.Tests
 
         public void SendText(long chatId, string text) { Sent.Add(text); SentTo.Add(chatId); }
         public void Broadcast(string text, long exceptId) { Broadcasts.Add(text); BroadcastExcept.Add(exceptId); }
-        public void SendScreenshot(long chatId, ScreenshotResult shot) { Screenshots++; }
+        public void SendScreenshot(long chatId, ScreenshotResult shot) { Screenshots++; LastImage = shot; LastImageTo = chatId; }
+        public ScreenshotResult LastImage;
+        public long LastImageTo;
+        public int Photos, PhotoCamera = -1;
+        public string PhotoError;
+        public bool PhotoDeferred;                     // true: la foto "arriva dopo" (CompletePhoto)
+        public Action<ScreenshotResult> PendingPhoto;
+        public void CapturePhoto(int camera, Action<ScreenshotResult> done)
+        {
+            Photos++;
+            PhotoCamera = camera;
+            if (PhotoDeferred) { PendingPhoto = done; return; }
+            done(PhotoResult());
+        }
+        public ScreenshotResult PhotoResult()
+        {
+            ScreenshotResult r = new ScreenshotResult();
+            r.Name = "foto";
+            r.Error = PhotoError;
+            if (r.Error == null) { r.Data = new byte[] { 0xFF, 0xD8, 0xFF }; r.Caption = "Integrated Camera"; }
+            return r;
+        }
+        public void CompletePhoto() { Action<ScreenshotResult> d = PendingPhoto; PendingPhoto = null; d(PhotoResult()); }
         public ScreenshotResult CaptureScreenshot(int monitor, bool hd)
         {
             ScreenshotResult r = new ScreenshotResult();
@@ -581,6 +604,291 @@ namespace WinUsage.Tests
             Eq(true, PixelFont.CanDraw("Bloccato alle 15:02"), "testo disegnabile");
             Eq(false, PixelFont.CanDraw("ciao 😀"), "emoji non disegnabile");
             Eq(PixelFont.Measure("E'", 1), PixelFont.Measure("È", 1), "misura dopo la normalizzazione");
+
+            Console.WriteLine("[R10] Lingua inglese");
+            System.Globalization.CultureInfo itCulture = new System.Globalization.CultureInfo("it-IT");
+            System.Globalization.CultureInfo enCulture = new System.Globalization.CultureInfo("en-US");
+            System.Globalization.CultureInfo deCulture = new System.Globalization.CultureInfo("de-DE");
+            Eq(false, L.ResolveEnglish(L.Auto, itCulture), "automatica con Windows in italiano: italiano");
+            Eq(true, L.ResolveEnglish(L.Auto, enCulture), "automatica con Windows in inglese: inglese");
+            Eq(true, L.ResolveEnglish(L.Auto, deCulture), "automatica con Windows in un'altra lingua: inglese");
+            Eq(false, L.ResolveEnglish(L.Italian, enCulture), "scelta manuale italiano vince su Windows");
+            Eq(true, L.ResolveEnglish(L.English, itCulture), "scelta manuale inglese vince su Windows");
+            Eq(L.Auto, L.Choice(null), "senza impostazione: automatica");
+
+            string ec; string[] ea;
+            RemoteController.ParseCommand("/lock 123456", out ec, out ea);
+            Eq("blocca", ec, "/lock = /blocca");
+            RemoteController.ParseCommand("/shutdown@MioBot 10", out ec, out ea);
+            Eq("spegni", ec, "/shutdown = /spegni (anche con il nome del bot)");
+            RemoteController.ParseCommand("/Cancel", out ec, out ea);
+            Eq("annulla", ec, "/cancel = /annulla");
+            foreach (string[] pair in new[] { new[] { "status", "stato" }, new[] { "unlock", "sblocca" }, new[] { "phones", "telefoni" },
+                                               new[] { "pair", "abbina" }, new[] { "help", "aiuto" } })
+                Eq(pair[1], RemoteController.Canonical(pair[0]), "/" + pair[0] + " = /" + pair[1]);
+            Eq("blocca", RemoteController.Canonical("blocca"), "i nomi italiani restano validi");
+            Eq("/blocca", RemoteController.Cmd("blocca"), "nome mostrato in italiano");
+
+            L.En = true;
+            try
+            {
+                Eq("/lock", RemoteController.Cmd("blocca"), "nome mostrato in inglese");
+                Eq("1 hour and 5 minutes", Fmt.Long(3900), "durata in inglese");
+                Eq("2 HRS 30 MIN", Fmt.ToastTime(9000), "durata del toast in inglese");
+                Eq("System", TimerIds.Labels[0], "nome del timer in inglese");
+                Eq(true, RemoteController.When(evening, evening).StartsWith("at "), "ora in inglese");
+                Eq(true, RemoteController.When(evening.AddDays(-1), evening).StartsWith("yesterday at "), "ieri in inglese");
+                Eq(true, PowerMessages.On(evening, true, evening).StartsWith("🟢 PC on — "), "accensione in inglese");
+                Eq(true, PowerMessages.Late("x", evening, evening.AddHours(9)).EndsWith("(sent late)"), "in ritardo in inglese");
+
+                FakeHost eh = new FakeHost();
+                RemoteSecrets es = new RemoteSecrets();
+                PairedPhone ep = new PairedPhone(); ep.Id = 42; ep.Name = "Mirko"; es.Phones.Add(ep);
+                RemoteController enc = new RemoteController(eh, es, new RemoteSettings(), delegate(long id) { return 0; });
+                DateTime et = new DateTime(2026, 11, 24, 18, 0, 0, DateTimeKind.Utc);
+                enc.Process(Msg(42, "/help", et), et);
+                Eq(true, eh.Last.Contains("/shutdown") && eh.Last.Contains("/lock") && !eh.Last.Contains("/spegni"),
+                   "l'aiuto in inglese mostra i comandi inglesi");
+                enc.Process(Msg(42, "/lock", et), et);
+                Eq(true, eh.Last.StartsWith("The Authenticator code for this phone") || eh.Last.Contains("not yet"),
+                   "risposta in inglese: " + eh.Last.Split('\n')[0]);
+                enc.Process(Msg(42, "/blocca", et), et);
+                Eq(true, eh.Last.Contains("not yet"), "anche il comando italiano risponde in inglese");
+                enc.Process(Msg(42, "/cancel", et), et);
+                Eq("No shutdown in progress.", eh.Last, "/cancel in inglese");
+                enc.Process(Msg(42, "/nope", et), et);
+                Eq("Unknown command. /help for the list.", eh.Last, "comando sconosciuto in inglese");
+                Eq(true, RemoteController.LockedShutdownNote.StartsWith("🔒 The PC is locked"), "avviso PC bloccato in inglese");
+            }
+            finally { L.En = false; }
+            Eq("1 ora e 5 minuti", Fmt.Long(3900), "di nuovo in italiano");
+
+            PhotoTests();
+            NetworkTests();
+        }
+
+        /// <summary>[R12] /foto (1.7): foto dalla webcam con il codice dell'Authenticator, configurabile.</summary>
+        private static void PhotoTests()
+        {
+            Console.WriteLine("[R12] /foto dalla webcam");
+            RemoteSecrets def = new RemoteSecrets();
+            Eq(true, def.RequiresCode("foto"), "predefinito: /foto con codice");
+            RemoteSecrets off = new RemoteSecrets();
+            off.CodePhoto = false;
+            Eq(false, RemoteSecrets.Parse(off.Serialize()).CodePhoto, "codice di /foto disattivato: salvato e riletto");
+            string old = def.Serialize().Replace("code_photo=", "x_old=");   // blob fino alla 1.6, senza la voce
+            Eq(true, RemoteSecrets.Parse(old).CodePhoto, "configurazione della 1.6: /foto con codice");
+            Eq(true, new RemoteSettings().NotifyPhoto, "predefinito: notifica della foto sul PC");
+            Eq("foto", RemoteController.Canonical("photo"), "/photo = /foto");
+            Eq("foto", RemoteController.Canonical("webcam"), "/webcam = /foto");
+            Eq("/foto", RemoteController.Cmd("foto"), "nome mostrato in italiano");
+            Eq(true, RemoteController.ExpiresWhenLate("foto"), "/foto in ritardo scade");
+
+            byte[] key = Encoding.ASCII.GetBytes("12345678901234567890");
+            FakeHost h = new FakeHost();
+            RemoteSecrets sec = new RemoteSecrets();
+            PairedPhone p = new PairedPhone(); p.Id = 42; p.Name = "Mirko"; p.TotpSecret = Base32.Encode(key); p.TotpVerified = true;
+            PairedPhone p2 = new PairedPhone(); p2.Id = 77; p2.Name = "Anna";
+            sec.Phones.Add(p); sec.Phones.Add(p2);
+            RemoteController c = new RemoteController(h, sec, new RemoteSettings(), delegate(long id) { return 0; });
+            DateTime t = new DateTime(2026, 11, 26, 17, 0, 0, DateTimeKind.Utc);
+
+            c.Process(Msg(42, "/aiuto", t), t);
+            Eq(true, h.Last.Contains("/foto CODICE [n]"), "l'aiuto mostra /foto con il codice");
+            c.Process(Msg(42, "/foto", t), t);
+            Eq(0, h.Photos, "senza codice nessuna foto");
+            Eq(true, h.Last.StartsWith("Serve il codice") && h.Last.Contains("/foto 123456"), "chiede il codice: " + h.Last.Split('\n')[0]);
+            c.Process(Msg(42, "/foto 000000", t), t);
+            Eq(0, h.Photos, "codice errato: nessuna foto");
+            c.Process(Msg(77, "/foto " + Totp.Code(key, Totp.StepOf(t)), t), t);
+            Eq(0, h.Photos, "telefono senza codice configurato: nessuna foto");
+            Eq(true, h.Last.Contains("non è ancora"), "risposta: codice non configurato per quel telefono");
+
+            DateTime t1 = t.AddSeconds(30);
+            c.Process(Msg(42, "/foto " + Totp.Code(key, Totp.StepOf(t1)), t1), t1);
+            Eq(1, h.Photos, "codice giusto: foto scattata");
+            Eq(0, h.PhotoCamera, "senza numero: la prima fotocamera");
+            Eq(1, h.Screenshots, "foto inviata");
+            Eq(42L, h.LastImageTo, "foto inviata solo a chi l'ha chiesta");
+            Eq("foto", h.LastImage.Name, "nome del file: foto-...");
+            Eq(true, h.LastImage.Caption.StartsWith("📷 Integrated Camera, "), "didascalia con fotocamera e ora: " + h.LastImage.Caption);
+            Eq(true, h.Local.Contains("foto"), "notifica sul PC");
+            Eq(0, h.Broadcasts.Count, "agli altri telefoni non si dice niente (come lo screenshot)");
+            Eq(true, h.Audits[h.Audits.Count - 1].StartsWith("/foto -> "), "nel registro senza il codice: " + h.Audits[h.Audits.Count - 1]);
+
+            DateTime t3 = t1.AddSeconds(60);
+            c.Process(Msg(42, "/sblocca " + Totp.Code(key, Totp.StepOf(t3)), t3), t3);
+            Eq(true, h.Last.Contains("/foto, /blocca e /spegni non chiedono il codice"), "sessione: /foto tra i comandi senza codice");
+            int before = h.Photos;
+            c.Process(Msg(42, "/foto 2", t3.AddSeconds(1)), t3.AddSeconds(1));
+            Eq(before + 1, h.Photos, "in sessione senza codice");
+            Eq(2, h.PhotoCamera, "/foto 2: seconda fotocamera");
+            c.Process(Msg(42, "/foto", t3.AddSeconds(3)), t3.AddSeconds(3));
+            Eq(before + 1, h.Photos, "una foto ogni 10 secondi");
+            Eq(true, h.Last.StartsWith("Una foto ogni 10 secondi"), "risposta: troppo presto");
+            foreach (string bad in new[] { "/foto 0", "/foto 10", "/foto abc", "/foto 1 2" })
+                c.Process(Msg(42, bad, t3.AddSeconds(20)), t3.AddSeconds(20));
+            Eq(before + 1, h.Photos, "numeri di fotocamera non validi rifiutati (0, 10, testo, due numeri)");
+            Eq(true, h.Last.StartsWith("Uso: /foto 123456 [n]"), "uso spiegato: " + h.Last);
+
+            h.PhotoDeferred = true;
+            DateTime t4 = t3.AddSeconds(40);
+            c.Process(Msg(42, "/photo", t4), t4);
+            Eq(before + 2, h.Photos, "/photo in inglese");
+            c.Process(Msg(42, "/foto", t4.AddSeconds(11)), t4.AddSeconds(11));
+            Eq(before + 2, h.Photos, "una foto alla volta");
+            Eq(true, h.Last.Contains("Sto già scattando"), "risposta: foto in corso");
+            int shots = h.Screenshots;
+            h.CompletePhoto();
+            Eq(shots + 1, h.Screenshots, "la foto arriva dopo e viene inviata");
+            c.Process(Msg(42, "/foto", t4.AddSeconds(30)), t4.AddSeconds(30));
+            sec.Phones.Remove(p);   // telefono tolto dal PC mentre la fotocamera lavora
+            h.CompletePhoto();
+            Eq(shots + 1, h.Screenshots, "telefono rimosso nel frattempo: foto scartata");
+            sec.Phones.Insert(0, p);
+            h.PhotoDeferred = false;
+
+            h.PhotoError = "📷 errore di prova";
+            c.Process(Msg(42, "/foto", t4.AddSeconds(50)), t4.AddSeconds(50));
+            Eq("📷 errore di prova", h.Last, "errore della fotocamera mandato al telefono");
+            h.PhotoError = null;
+
+            int late = h.Photos;
+            c.Process(Msg(42, "/foto", t4.AddSeconds(70)), t4.AddSeconds(70 + 300));
+            Eq(late, h.Photos, "/foto arrivato con 5 minuti di ritardo: nessuna foto");
+            Eq(true, h.Last.Contains("scaduto"), "risposta: comando scaduto");
+
+            sec.CodePhoto = false;
+            DateTime t5 = t4.AddMinutes(30);   // sessione /sblocca finita
+            c.Process(Msg(42, "/aiuto", t5), t5);
+            Eq(true, h.Last.Contains("/foto [n]") && !h.Last.Contains("/foto CODICE"), "aiuto senza codice per /foto");
+            c.Process(Msg(42, "/foto", t5), t5);
+            Eq(late + 1, h.Photos, "codice disattivato: foto senza codice");
+            c.Process(Msg(42, "/foto 123456 1", t5.AddSeconds(15)), t5.AddSeconds(15));
+            Eq(1, h.PhotoCamera, "un codice scritto lo stesso viene ignorato");
+
+            string dark = RemoteController.PhotoCaption("Cam", true, t);
+            Eq(true, dark.StartsWith("📷 Cam, ") && dark.Contains("quasi nera"), "foto nera: avviso nella didascalia");
+            Eq(true, RemoteController.PhotoCaption(null, false, t).StartsWith("📷 Webcam, "), "senza nome: Webcam");
+
+            Console.WriteLine("[R12b] Webcam: formato, luminosità, messaggi");
+            List<int[]> f = new List<int[]>();
+            f.Add(new[] { 640, 480, 3000 }); f.Add(new[] { 1920, 1080, 500 }); f.Add(new[] { 1920, 1080, 3000 }); f.Add(new[] { 3840, 2160, 3000 });
+            Eq(2, Webcam.ChooseFormat(f), "il più grande entro 1920x1080, a parità più fotogrammi al secondo");
+            List<int[]> big = new List<int[]>();
+            big.Add(new[] { 4096, 2160, 3000 }); big.Add(new[] { 2592, 1944, 1500 }); big.Add(new[] { 0, 0, 0 });
+            Eq(1, Webcam.ChooseFormat(big), "tutti troppo grandi: il più piccolo");
+            Eq(-1, Webcam.ChooseFormat(new List<int[]>()), "nessun formato");
+            Eq(0, Webcam.MeanLuma(new byte[64 * 48 * 4], 64, 48), "immagine nera: luminosità 0");
+            byte[] white = new byte[64 * 48 * 4];
+            for (int i = 0; i < white.Length; i++) white[i] = 255;
+            Eq(255, Webcam.MeanLuma(white, 64, 48), "immagine bianca: luminosità 255");
+            Eq("📷 Fotocamera 3 inesistente: ce ne sono 2 (1 Integrated Camera, 2 USB Camera).",
+               Webcam.CameraList(3, new List<string> { "Integrated Camera", "USB Camera" }), "fotocamera inesistente: elenco");
+            Eq(true, Webcam.ErrorText(Webcam.E_ACCESSDENIED).Contains("Consenti alle app desktop"), "accesso negato: dove attivarlo");
+            Eq(true, Webcam.ErrorText(unchecked((int)0xC00D3704)).EndsWith("0xC00D3704."), "altri errori con il codice");
+            foreach (string title in new[] { "FOTO DALLA WEBCAM", "AL TELEFONO" })
+                Eq(true, PixelFont.CanDraw(title) && PixelFont.Measure(title, 1) <= 156, "titolo nel font pixel: " + title);
+            L.En = true;
+            try
+            {
+                Eq("/photo", RemoteController.Cmd("foto"), "nome mostrato in inglese");
+                Eq(true, Webcam.ErrorText(Webcam.E_ACCESSDENIED).Contains("Let desktop apps access your camera"), "accesso negato in inglese");
+                foreach (string title in new[] { "WEBCAM PHOTO", "TO THE PHONE" })
+                    Eq(true, PixelFont.CanDraw(title) && PixelFont.Measure(title, 1) <= 156, "titolo inglese nel font pixel: " + title);
+            }
+            finally { L.En = false; }
+        }
+
+        /// <summary>
+        /// [R11] Client Telegram contro il server finto: quello che nella 1.6.0 faceva perdere i comandi (Abort che dopo un
+        /// invio non fermava più la lettura) e i tempi dei nuovi tentativi di invio.
+        /// </summary>
+        private static void NetworkTests()
+        {
+            Console.WriteLine("[R11] Rete: lettura, invii e connessioni (server Telegram finto)");
+            string savedBase = TelegramApi.BaseUrl;
+            FakeTelegram tg = new FakeTelegram();
+            TelegramApi.BaseUrl = tg.BaseUrl;
+            try
+            {
+                // 1) Abort ferma la lettura in attesa anche se nel frattempo la stessa istanza ha mandato un messaggio
+                TelegramApi api = new TelegramApi("1:TEST");
+                Exception readError = null;
+                Thread reader = new Thread(delegate()
+                {
+                    try { api.GetUpdates(0, 20); } catch (Exception ex) { readError = ex; }
+                });
+                reader.IsBackground = true;
+                reader.Start();
+                Eq(true, FakeTelegram.WaitFor(delegate { return tg.PollPending; }, 5000), "lettura in attesa sul server");
+                Eq(true, api.SendMessage(FakeTelegram.Phone, "risposta", 10000) > 0, "invio con la stessa istanza durante la lettura");
+                api.Abort();
+                Eq(true, reader.Join(3000), "Abort ferma la lettura anche dopo un invio (nella 1.6.0 restava appesa)");
+                Eq(true, readError is TelegramException, "la lettura interrotta finisce con un errore di rete");
+
+                // 2) Abort non tocca un invio in corso (nella 1.6.0 interrompeva la risposta al posto della lettura)
+                tg.SlowSendMs = 1200;
+                Exception sendError = null;
+                long slowId = 0;
+                Thread sender = new Thread(delegate()
+                {
+                    try { slowId = api.SendMessage(FakeTelegram.Phone, "lento", 10000); } catch (Exception ex) { sendError = ex; }
+                });
+                sender.IsBackground = true;
+                sender.Start();
+                Thread.Sleep(300);
+                api.Abort();
+                sender.Join(5000);
+                tg.SlowSendMs = 0;
+                Eq("", sendError == null ? "" : sendError.Message, "Abort non interrompe un invio in corso");
+                Eq(true, slowId > 0, "l'invio lento arriva");
+
+                // 3) dopo Close nessuna lettura parte più (thread di lettura fermato), gli invii sì
+                TelegramApi closing = new TelegramApi("1:TEST");
+                closing.Close();
+                int before = tg.Polls;
+                bool refused = false;
+                try { closing.GetUpdates(0, 1); } catch (TelegramException) { refused = true; }
+                Eq(true, refused, "dopo Close la lettura è rifiutata");
+                Eq(before, tg.Polls, "dopo Close nessuna lettura arriva al server");
+                Eq(true, closing.SendMessage(FakeTelegram.Phone, "ok", 10000) > 0, "dopo Close gli invii funzionano ancora");
+
+                // 4) connessioni: la lettura riusa la sua finché NewConnections non ne chiede una nuova; gli invii mai
+                TelegramApi conn = new TelegramApi("1:TEST");
+                tg.Inject("/a");
+                UpdateBatch b1 = conn.GetUpdates(0, 5);
+                int p1 = tg.LastPollPort;
+                tg.Inject("/b");
+                UpdateBatch b2 = conn.GetUpdates(b1.NextOffset, 5);
+                int p2 = tg.LastPollPort;
+                Eq(1, b2.Messages.Count, "seconda lettura: un messaggio");
+                Eq(true, p1 == p2, "letture di seguito sulla stessa connessione");
+                TelegramApi.NewConnections();
+                tg.Inject("/c");
+                UpdateBatch b3 = conn.GetUpdates(b2.NextOffset, 5);
+                Eq(1, b3.Messages.Count, "lettura dopo NewConnections: un messaggio");
+                Eq(true, tg.LastPollPort != p2, "dopo NewConnections (risveglio, rete) la lettura usa una connessione nuova");
+                conn.SendMessage(FakeTelegram.Phone, "uno", 10000);
+                conn.SendMessage(FakeTelegram.Phone, "due", 10000);
+                List<FakeTelegram.Sent> s = tg.SentMessages;
+                int sa = s[s.Count - 2].Port, sb = s[s.Count - 1].Port;
+                Eq(true, sa != sb && sa != tg.LastPollPort && sb != tg.LastPollPort, "ogni invio su una connessione nuova");
+            }
+            finally
+            {
+                TelegramApi.BaseUrl = savedBase;
+                tg.Dispose();
+            }
+
+            // 5) tempi dei nuovi tentativi di invio
+            StringBuilder delays = new StringBuilder();
+            for (int i = 1; i <= 7; i++) delays.Append(i > 1 ? "," : "").Append(SendRetry.DelaySeconds(i));
+            Eq("1,2,4,8,15,15,15", delays.ToString(), "attese tra i tentativi di invio (secondi; nella 1.6.0 fino a 300)");
+            DateTime t = new DateTime(2026, 11, 24, 18, 0, 0, DateTimeKind.Utc);
+            Eq(false, SendRetry.GiveUp(true, t, t.AddDays(2)), "un messaggio della coda nel database non si abbandona");
+            Eq(false, SendRetry.GiveUp(false, t, t.AddMinutes(2)), "una risposta si riprova per 2 minuti");
+            Eq(true, SendRetry.GiveUp(false, t, t.AddMinutes(4)), "una risposta di 4 minuti si abbandona");
         }
     }
 }
