@@ -36,7 +36,7 @@ namespace WinUsage
             this.storage = storage;
             this.tracker = tracker;
 
-            Text = "WinUsage - Manutenzione database";
+            Text = L.T("WinUsage - Manutenzione database", "WinUsage - Database maintenance");
             AutoScaleMode = AutoScaleMode.Font;
             Font = SystemFonts.MessageBoxFont;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -62,39 +62,41 @@ namespace WinUsage
             root.Controls.Add(info);
 
             // Operazioni
-            root.Controls.Add(SectionTitle("Operazioni"));
+            root.Controls.Add(SectionTitle(L.T("Operazioni", "Operations")));
             FlowLayoutPanel ops = Row(0);
-            ops.Controls.Add(MakeButton("Verifica integrità", OnCheck));
-            ops.Controls.Add(MakeButton("Compatta", OnCompact));
+            ops.Controls.Add(MakeButton(L.T("Verifica integrità", "Check integrity"), OnCheck));
+            ops.Controls.Add(MakeButton(L.T("Compatta", "Compact"), OnCompact));
             ops.Controls.Add(MakeButton("Backup...", OnBackup));
-            ops.Controls.Add(MakeButton("Esporta CSV...", OnExport));
-            ops.Controls.Add(MakeButton("Apri cartella", OnOpenFolder));
+            ops.Controls.Add(MakeButton(L.T("Esporta CSV...", "Export CSV..."), OnExport));
+            ops.Controls.Add(MakeButton(L.T("Apri cartella", "Open folder"), OnOpenFolder));
             root.Controls.Add(ops);
-            root.Controls.Add(Hint("Compatta recupera lo spazio lasciato dai dati eliminati. Il backup è una copia completa " +
-                                   "del database; il CSV contiene i totali di ogni giorno e si apre con Excel."));
+            root.Controls.Add(Hint(L.T("Compatta recupera lo spazio lasciato dai dati eliminati. Il backup è una copia completa " +
+                                       "del database; il CSV contiene i totali di ogni giorno e si apre con Excel.",
+                                       "Compact recovers the space left by deleted data. The backup is a full copy of the " +
+                                       "database; the CSV contains the totals of each day and opens in Excel.")));
 
             // Pulizia
-            root.Controls.Add(SectionTitle("Pulizia"));
+            root.Controls.Add(SectionTitle(L.T("Pulizia", "Clean-up")));
             FlowLayoutPanel older = Row(0);
-            older.Controls.Add(InlineLabel("Elimina i dati più vecchi di"));
+            older.Controls.Add(InlineLabel(L.T("Elimina i dati più vecchi di", "Delete data older than")));
             numOlder.Minimum = 1;
             numOlder.Maximum = AppSettings.MaxRetentionDays;
             numOlder.Value = 365;
             numOlder.Width = 70;
             older.Controls.Add(numOlder);
-            older.Controls.Add(InlineLabel("giorni"));
-            older.Controls.Add(MakeButton("Elimina...", OnDeleteOlder));
+            older.Controls.Add(InlineLabel(L.T("giorni", "days")));
+            older.Controls.Add(MakeButton(L.T("Elimina...", "Delete..."), OnDeleteOlder));
             root.Controls.Add(older);
 
             FlowLayoutPanel all = Row(0);
-            all.Controls.Add(MakeButton("Azzera tutto lo storico...", OnDeleteAll));
+            all.Controls.Add(MakeButton(L.T("Azzera tutto lo storico...", "Clear all history..."), OnDeleteAll));
             root.Controls.Add(all);
-            root.Controls.Add(Hint("La configurazione non viene toccata. Prima di eliminare puoi fare un backup."));
+            root.Controls.Add(Hint(L.T("La configurazione non viene toccata. Prima di eliminare puoi fare un backup.", "Settings are not touched. You can make a backup before deleting.")));
 
             // Conservazione automatica
-            root.Controls.Add(SectionTitle("Conservazione automatica"));
+            root.Controls.Add(SectionTitle(L.T("Conservazione automatica", "Automatic retention")));
             FlowLayoutPanel keep = Row(0);
-            chkRetention.Text = "Elimina automaticamente i dati più vecchi di";
+            chkRetention.Text = L.T("Elimina automaticamente i dati più vecchi di", "Automatically delete data older than");
             chkRetention.AutoSize = true;
             chkRetention.Margin = new Padding(3, 5, 6, 0);
             numRetention.Minimum = AppSettings.MinRetentionDays;
@@ -105,17 +107,19 @@ namespace WinUsage
             numRetention.Value = retentionDays > 0
                 ? Math.Max(numRetention.Minimum, Math.Min(numRetention.Maximum, retentionDays)) : 365;
             numRetention.Enabled = chkRetention.Checked;
-            saveRetention = MakeButton("Salva", OnSaveRetention);
+            saveRetention = MakeButton(L.T("Salva", "Save"), OnSaveRetention);
             saveRetention.Enabled = false;
             chkRetention.CheckedChanged += delegate { numRetention.Enabled = chkRetention.Checked; UpdateSaveRetention(); };
             numRetention.ValueChanged += delegate { UpdateSaveRetention(); };
             keep.Controls.Add(chkRetention);
             keep.Controls.Add(numRetention);
-            keep.Controls.Add(InlineLabel("giorni"));
+            keep.Controls.Add(InlineLabel(L.T("giorni", "days")));
             keep.Controls.Add(saveRetention);
             root.Controls.Add(keep);
-            root.Controls.Add(Hint("Controllata all'avvio e poi ogni 6 ore. Minimo " + AppSettings.MinRetentionDays +
-                                   " giorni, così lo storico a 30 giorni resta completo."));
+            root.Controls.Add(Hint(L.T("Controllata all'avvio e poi ogni 6 ore. Minimo " + AppSettings.MinRetentionDays +
+                                       " giorni, così lo storico a 30 giorni resta completo.",
+                                       "Checked at start-up and then every 6 hours. Minimum " + AppSettings.MinRetentionDays +
+                                       " days, so the 30-day history stays complete.")));
 
             // Stato e chiusura
             status.AutoSize = true;
@@ -129,7 +133,7 @@ namespace WinUsage
             buttons.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             buttons.Dock = DockStyle.Right;
             Button close = new Button();
-            close.Text = "Chiudi";
+            close.Text = L.T("Chiudi", "Close");
             close.AutoSize = true;
             close.Click += delegate { Close(); };
             buttons.Controls.Add(close);
@@ -199,19 +203,25 @@ namespace WinUsage
             {
                 DbInfo i = storage.GetInfo();
                 string period = i.Days == 0
-                    ? "nessun giorno registrato"
-                    : i.Days + (i.Days == 1 ? " giorno" : " giorni") + ", dal " + Pretty(i.FirstDay) + " al " + Pretty(i.LastDay);
+                    ? L.T("nessun giorno registrato", "no days recorded")
+                    : i.Days + Days(i.Days) + L.T(", dal ", ", from ") + Pretty(i.FirstDay) + L.T(" al ", " to ") + Pretty(i.LastDay);
                 info.Text =
                     "File: " + i.Path + "\r\n" +
-                    "Dimensione: " + DbInfo.Size(i.FileBytes + i.WalBytes) +
-                    " (spazio recuperabile con Compatta: " + DbInfo.Size(i.FreeBytes) + ")\r\n" +
-                    "Storico: " + period + "\r\n" +
-                    "Sessioni registrate: " + i.Sessions + "    SQLite " + i.SqliteVersion;
+                    L.T("Dimensione: ", "Size: ") + DbInfo.Size(i.FileBytes + i.WalBytes) +
+                    L.T(" (spazio recuperabile con Compatta: ", " (space recoverable with Compact: ") + DbInfo.Size(i.FreeBytes) + ")\r\n" +
+                    L.T("Storico: ", "History: ") + period + "\r\n" +
+                    L.T("Sessioni registrate: ", "Recorded sessions: ") + i.Sessions + "    SQLite " + i.SqliteVersion;
             }
             catch (Exception ex)
             {
-                info.Text = "File: " + storage.DbPath + "\r\nDatabase non disponibile: " + ex.Message;
+                info.Text = "File: " + storage.DbPath + "\r\n" + L.T("Database non disponibile: ", "Database not available: ") + ex.Message;
             }
+        }
+
+        /// <summary>" giorno" / " giorni" ( " day" / " days").</summary>
+        private static string Days(long n)
+        {
+            return n == 1 ? L.T(" giorno", " day") : L.T(" giorni", " days");
         }
 
         private static string Pretty(string dayKey)
@@ -241,7 +251,7 @@ namespace WinUsage
             catch (Exception ex)
             {
                 Log.Write(what + ": " + ex.Message);
-                SetStatus(what + " non riuscito: " + ex.Message, true);
+                SetStatus(what + L.T(" non riuscito: ", " failed: ") + ex.Message, true);
             }
             finally
             {
@@ -260,24 +270,26 @@ namespace WinUsage
 
         private void OnCheck(object sender, EventArgs e)
         {
-            Run("Verifica", delegate
+            Run(L.T("Verifica", "Check"), delegate
             {
                 List<string> r = storage.IntegrityCheck();
-                if (r.Count == 1 && r[0] == "ok") return "Verifica completata: il database è integro.";
+                if (r.Count == 1 && r[0] == "ok") return L.T("Verifica completata: il database è integro.", "Check complete: the database is intact.");
                 string details = string.Join("\r\n", r.GetRange(0, Math.Min(10, r.Count)).ToArray());
-                MessageBox.Show(this, "SQLite ha trovato dei problemi:\r\n\r\n" + details +
-                    "\r\n\r\nFai un backup e, se lo storico appare sbagliato, azzeralo.",
-                    "Verifica integrità", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return "La verifica ha trovato " + r.Count + " problemi (dettagli nel messaggio).";
+                MessageBox.Show(this, L.T("SQLite ha trovato dei problemi:", "SQLite found some problems:") + "\r\n\r\n" + details +
+                    "\r\n\r\n" + L.T("Fai un backup e, se lo storico appare sbagliato, azzeralo.",
+                                     "Make a backup and, if the history looks wrong, clear it."),
+                    L.T("Verifica integrità", "Integrity check"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return L.T("La verifica ha trovato " + r.Count + " problemi (dettagli nel messaggio).",
+                           "The check found " + r.Count + " problems (details in the message).");
             });
         }
 
         private void OnCompact(object sender, EventArgs e)
         {
-            Run("Compattazione", delegate
+            Run(L.T("Compattazione", "Compaction"), delegate
             {
                 long saved = storage.Compact();
-                return "Database compattato" + (saved > 0 ? ": recuperati " + DbInfo.Size(saved) + "." : ".");
+                return L.T("Database compattato", "Database compacted") + (saved > 0 ? L.T(": recuperati ", ": recovered ") + DbInfo.Size(saved) + "." : ".");
             });
         }
 
@@ -285,21 +297,21 @@ namespace WinUsage
         {
             using (SaveFileDialog dlg = new SaveFileDialog())
             {
-                dlg.Title = "Salva una copia del database";
-                dlg.Filter = "Database SQLite (*.db)|*.db|Tutti i file (*.*)|*.*";
+                dlg.Title = L.T("Salva una copia del database", "Save a copy of the database");
+                dlg.Filter = L.T("Database SQLite (*.db)|*.db|Tutti i file (*.*)|*.*", "SQLite database (*.db)|*.db|All files (*.*)|*.*");
                 dlg.FileName = "WinUsage-backup-" + DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".db";
                 dlg.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 string target = dlg.FileName;
                 if (string.Equals(Path.GetFullPath(target), Path.GetFullPath(storage.DbPath), StringComparison.OrdinalIgnoreCase))
                 {
-                    SetStatus("Scegli un file diverso dal database in uso.", true);
+                    SetStatus(L.T("Scegli un file diverso dal database in uso.", "Choose a file other than the database in use."), true);
                     return;
                 }
                 Run("Backup", delegate
                 {
                     storage.Backup(target);
-                    return "Backup salvato in " + target;
+                    return L.T("Backup salvato in ", "Backup saved to ") + target;
                 });
             }
         }
@@ -308,16 +320,16 @@ namespace WinUsage
         {
             using (SaveFileDialog dlg = new SaveFileDialog())
             {
-                dlg.Title = "Esporta lo storico in CSV";
-                dlg.Filter = "File CSV (*.csv)|*.csv";
+                dlg.Title = L.T("Esporta lo storico in CSV", "Export history to CSV");
+                dlg.Filter = L.T("File CSV (*.csv)|*.csv", "CSV file (*.csv)|*.csv");
                 dlg.FileName = "WinUsage-storico-" + DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".csv";
                 dlg.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 string target = dlg.FileName;
-                Run("Esportazione", delegate
+                Run(L.T("Esportazione", "Export"), delegate
                 {
                     int n = storage.ExportCsv(target);
-                    return "Esportati " + n + (n == 1 ? " giorno" : " giorni") + " in " + target;
+                    return L.T("Esportati ", "Exported ") + n + Days(n) + L.T(" in ", " to ") + target;
                 });
             }
         }
@@ -330,7 +342,7 @@ namespace WinUsage
             }
             catch (Exception ex)
             {
-                SetStatus("Impossibile aprire la cartella: " + ex.Message, true);
+                SetStatus(L.T("Impossibile aprire la cartella: ", "Cannot open the folder: ") + ex.Message, true);
             }
         }
 
@@ -339,34 +351,38 @@ namespace WinUsage
             int n = (int)numOlder.Value;
             string firstKept = Storage.FirstDayToKeep(DateTime.Now, n);
             if (MessageBox.Show(this,
-                    "Eliminare definitivamente i dati precedenti al " + Pretty(firstKept) + " (più vecchi di " + n +
-                    " giorni)?\r\n\r\nL'operazione non si può annullare.",
-                    "Elimina dati vecchi", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    L.T("Eliminare definitivamente i dati precedenti al " + Pretty(firstKept) + " (più vecchi di " + n +
+                        " giorni)?\r\n\r\nL'operazione non si può annullare.",
+                        "Permanently delete the data before " + Pretty(firstKept) + " (older than " + n +
+                        " days)?\r\n\r\nThis cannot be undone."),
+                    L.T("Elimina dati vecchi", "Delete old data"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-            Run("Pulizia", delegate
+            Run(L.T("Pulizia", "Clean-up"), delegate
             {
                 int days = storage.DeleteBefore(firstKept);
                 RaiseDataChanged();
-                return days == 0 ? "Nessun dato più vecchio di " + n + " giorni."
-                                 : "Eliminati " + days + (days == 1 ? " giorno" : " giorni") + " di storico. " +
-                                   "Usa Compatta per recuperare lo spazio.";
+                return days == 0 ? L.T("Nessun dato più vecchio di " + n + " giorni.", "No data older than " + n + " days.")
+                                 : L.T("Eliminati ", "Deleted ") + days + Days(days) + L.T(" di storico. ", " of history. ") +
+                                   L.T("Usa Compatta per recuperare lo spazio.", "Use Compact to recover the space.");
             });
         }
 
         private void OnDeleteAll(object sender, EventArgs e)
         {
             if (MessageBox.Show(this,
-                    "Eliminare definitivamente tutto lo storico (totali giornalieri e sessioni passate)?\r\n" +
-                    "I totali di oggi ripartono da zero; la configurazione resta.\r\n\r\nL'operazione non si può annullare.",
-                    "Azzera storico", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    L.T("Eliminare definitivamente tutto lo storico (totali giornalieri e sessioni passate)?\r\n" +
+                        "I totali di oggi ripartono da zero; la configurazione resta.\r\n\r\nL'operazione non si può annullare.",
+                        "Permanently delete all history (daily totals and past sessions)?\r\n" +
+                        "Today's totals start again from zero; settings stay.\r\n\r\nThis cannot be undone."),
+                    L.T("Azzera storico", "Clear history"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
                     MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-            Run("Azzeramento", delegate
+            Run(L.T("Azzeramento", "Clearing"), delegate
             {
                 storage.DeleteAllUsage(tracker.SessionId);
                 tracker.ResetToday();
                 storage.Compact();
                 RaiseDataChanged();
-                return "Storico azzerato.";
+                return L.T("Storico azzerato.", "History cleared.");
             });
         }
 
@@ -390,12 +406,13 @@ namespace WinUsage
                 try { toDelete = storage.CountDaysBefore(Storage.FirstDayToKeep(DateTime.Now, days)); }
                 catch (Exception) { }
                 if (toDelete > 0 && MessageBox.Show(this,
-                        "Con questa regola vengono eliminati subito " + toDelete + (toDelete == 1 ? " giorno" : " giorni") +
-                        " di storico (più vecchi di " + days + " giorni).\r\n\r\nContinuare?",
-                        "Conservazione automatica", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                        L.T("Con questa regola vengono eliminati subito ", "With this rule ") + toDelete + Days(toDelete) +
+                        L.T(" di storico (più vecchi di " + days + " giorni).\r\n\r\nContinuare?",
+                            " of history (older than " + days + " days) are deleted right away.\r\n\r\nContinue?"),
+                        L.T("Conservazione automatica", "Automatic retention"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
                         MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             }
-            Run("Conservazione automatica", delegate
+            Run(L.T("Conservazione automatica", "Automatic retention"), delegate
             {
                 savedRetention = days;
                 Action<int> h = RetentionChanged;
@@ -403,8 +420,9 @@ namespace WinUsage
                 UpdateSaveRetention();
                 RaiseDataChanged();
                 return days > 0
-                    ? "Salvato: i dati più vecchi di " + days + " giorni vengono eliminati automaticamente."
-                    : "Salvato: lo storico viene conservato per sempre.";
+                    ? L.T("Salvato: i dati più vecchi di " + days + " giorni vengono eliminati automaticamente.",
+                          "Saved: data older than " + days + " days is deleted automatically.")
+                    : L.T("Salvato: lo storico viene conservato per sempre.", "Saved: history is kept forever.");
             });
         }
     }

@@ -49,7 +49,7 @@ namespace WinUsage
             t.BackColor = Color.Transparent;
 
             Label title = new Label();
-            title.Text = "Stai usando il computer da";
+            title.Text = L.T("Stai usando il computer da", "You have been using the computer for");
             title.AutoSize = true;
             title.ForeColor = SystemColors.GrayText;
             t.Controls.Add(title, 0, 0);
@@ -63,8 +63,8 @@ namespace WinUsage
             t.SetColumnSpan(big, 3);
 
             t.Controls.Add(Header(""), 0, 2);
-            t.Controls.Add(Header("Da avvio"), 1, 2);
-            t.Controls.Add(Header("Oggi"), 2, 2);
+            t.Controls.Add(Header(L.T("Da avvio", "Since start")), 1, 2);
+            t.Controls.Add(Header(L.T("Oggi", "Today")), 2, 2);
 
             for (int i = 0; i < TimerIds.Count; i++)
             {
@@ -81,7 +81,7 @@ namespace WinUsage
             }
 
             Label note = new Label();
-            note.Text = "Il tempo in standby non viene conteggiato.";
+            note.Text = L.T("Il tempo in standby non viene conteggiato.", "Time in standby is not counted.");
             note.AutoSize = true;
             note.ForeColor = SystemColors.GrayText;
             note.Margin = new Padding(0, 10, 0, 0);

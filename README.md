@@ -1,15 +1,16 @@
-# WinUsage 1.6
+# WinUsage 1.7
 
 *English: WinUsage is a small Windows 11 tray utility that measures how long you have been using the computer
 (standby and locked screen excluded), with per-user history, pixel-art notifications and optional remote control from
 Telegram. Since 1.6 the whole app, the installer and the Telegram bot are also in English: it follows the Windows
 language, or choose it in Settings → "Lingua / Language". Bot commands work in both languages (/lock, /shutdown,
-/cancel, /status, /unlock, /phones, /pair, /help).*
+/cancel, /status, /unlock, /phones, /pair, /help). Since 1.7, /photo takes a picture with the built-in webcam and sends
+it to the chat (Authenticator code required by default, configurable).*
 
 Piccola utility per Windows 11 che vive nella tray e misura da quanto tempo stai usando il computer
 (standby e schermo bloccato esclusi), con storico in SQLite separato per ogni utente. Grafica in pixel art a tema subacqueo.
 Dalla 1.3 si può controllare dal telefono con un bot Telegram: screenshot, app in uso, chat, blocco, spegnimento
-e messaggi di accensione/spegnimento.
+e messaggi di accensione/spegnimento; dalla 1.7 anche una foto dalla webcam (`/foto`).
 
 ![Messaggio di soglia](docs/toast.png)
 
@@ -96,16 +97,29 @@ tornando a una versione precedente alla 1.5 invece l'abbinamento andrebbe rifatt
 | `/stato` | Tempi di utilizzo di oggi e dall'avvio | no |
 | `/app` | Applicazione in primo piano e da quanto, ultimo input, gioco Steam, schermo intero. Mai il titolo della finestra | no |
 | `/screenshot [n] [hd]` | Cattura di tutti i monitor (o del monitor n); `hd` = PNG originale | no |
+| `/foto CODICE [n]` | Foto dalla webcam integrata (o dalla fotocamera n, se ce n'è più di una), inviata in chat con il nome della fotocamera e l'ora | sì |
 | `/chat` | Notifica sul PC con *APRI CHAT* e *CHIUDI*; il telefono sa se la chat viene aperta o rifiutata | no |
 | `/blocca CODICE` | Blocca il PC (Win+L); allo sblocco compare "bloccato dal telefono" | sì |
 | `/spegni CODICE [minuti]` | Spegnimento dopo un conto alla rovescia (5 minuti di default, da 1 a 120) | sì |
 | `/annulla` | Ferma lo spegnimento | mai |
-| `/sblocca CODICE` | Per 15 minuti `/blocca` e `/spegni` non chiedono il codice | — |
+| `/sblocca CODICE` | Per 15 minuti i comandi con codice (`/blocca`, `/spegni`, `/foto`) non lo chiedono | — |
 | `/telefoni` | Telefoni abbinati e chi ha il codice configurato | no |
 | `/stop` | Disattiva il controllo remoto per tutti i telefoni (si riattiva solo dal PC) | no |
 | testo senza `/` | Va nella chat del PC | no |
 
 Quali comandi chiedono il codice si sceglie nella scheda *Comandi*.
+
+**Foto dalla webcam** (dalla 1.7): `/foto` (in inglese `/photo`, anche `/webcam`) accende la fotocamera integrata,
+aspetta un secondo e mezzo che esposizione e colori si assestino e manda la foto in chat (JPEG, al massimo 1920x1080).
+Di default chiede il **codice dell'Authenticator** del telefono che scrive, come `/blocca`: si può togliere nella scheda
+*Comandi* (*/foto (foto dalla webcam)*). Con più fotocamere `/foto CODICE 2` usa la seconda; un numero che non c'è
+risponde con l'elenco. Una foto alla volta e al massimo una ogni 10 secondi; un `/foto` arrivato con più di 2 minuti di
+ritardo (PC in standby) risponde "comando scaduto" invece di scattare a sorpresa. Chi è al PC vede la luce della webcam e
+la notifica pixel art "FOTO DALLA WEBCAM" (disattivabile); le foto si cancellano dalla chat dopo 10 minuti, come gli
+screenshot. Usa Media Foundation di Windows, quindi funziona con le fotocamere che vede l'app Fotocamera (anche quelle
+dei portatili recenti); se Windows nega l'accesso, il telefono riceve dove attivarlo: *Impostazioni → Privacy e
+sicurezza → Fotocamera → Consenti alle app desktop di accedere alla fotocamera*. Se l'immagine è quasi nera la
+didascalia lo dice (obiettivo coperto o tasto della privacy). Non funziona mentre un altro utente usa il PC.
 
 **Chat**: dal pulsante *CHAT* del popup o con `/chat` dal telefono. Destinatari fissi: i telefoni abbinati. Con più
 telefoni è una chat di gruppo: quello che scrivi sul PC arriva a tutti, i messaggi di un telefono arrivano anche agli
@@ -135,7 +149,7 @@ spegnimento/riavvio/disconnessione con i totali del giorno, chiusura di WinUsage
 blocco: riconosciuto al riavvio dall'ultimo segnale salvato). Standby e blocco schermo si possono attivare. Se allo
 spegnimento la rete non c'è più, il messaggio parte al riavvio con l'indicazione "notificato in ritardo".
 
-**Notifiche sul PC in pixel art**, tutte disattivabili tranne gli avvisi di sicurezza: screenshot inviato,
+**Notifiche sul PC in pixel art**, tutte disattivabili tranne gli avvisi di sicurezza: screenshot inviato, foto dalla webcam,
 app in uso richiesta, messaggio dal telefono, bloccato da remoto, conto alla rovescia, spegnimento annullato,
 abbinamento riuscito, avvisi di sicurezza (restano finché non si clicca). Con il controllo remoto attivo l'icona
 nella tray ha un pallino verde.
@@ -145,23 +159,25 @@ nella tray ha un pallino verde.
 **Sicurezza** (analisi completa nel documento di design del progetto):
 - comandi eseguiti solo se Telegram li attribuisce all'account abbinato; ignorati gruppi, messaggi inoltrati,
   modificati, didascalie e messaggi via bot;
-- `/blocca`, `/spegni` e `/sblocca` più vecchi di 2 minuti scartati (Telegram conserva i messaggi a PC spento),
+- `/blocca`, `/spegni`, `/foto` e `/sblocca` più vecchi di 2 minuti scartati (Telegram conserva i messaggi a PC spento),
   confrontando con l'ora del server Telegram e non con l'orologio del PC; i comandi che leggono soltanto (`/stato`,
   `/app`, `/screenshot`, `/chat`) si eseguono anche se arrivano in ritardo;
 - codice TOTP monouso, 3 errori = comandi con codice bloccati per 15 minuti; limite di 20 comandi al minuto e di uno
-  screenshot ogni 10 secondi;
+  screenshot e una foto ogni 10 secondi;
 - token, utente abbinato, segreto e regole in un unico blocco cifrato con DPAPI: se qualcuno lo modifica nel
   database il controllo remoto si spegne invece di obbedire a un altro account;
 - il token non finisce mai nel log; un secondo programma che usa lo stesso token o un webhook impostato producono
   un avviso ("possibile token compromesso");
 - screenshot solo in memoria, cancellati dalla chat dopo 10 minuti, mai con un gestore di password in primo piano;
+- foto dalla webcam con il codice dell'Authenticator (di default), solo in memoria, cancellate dalla chat come gli
+  screenshot, con la notifica sul PC;
 - registro di ogni comando (anche rifiutato) nella scheda *Registro*, senza i codici.
 
 Limiti da sapere: i bot di Telegram non hanno cifratura end-to-end, quindi Telegram può leggere comandi,
-screenshot e orari; chi controlla il tuo account Telegram può vedere il tuo schermo (attiva la verifica in due
+screenshot, foto e orari; chi controlla il tuo account Telegram può vedere il tuo schermo (attiva la verifica in due
 passaggi). Se perdi il telefono: @BotFather → `/revoke`. Se il PC lo usano altre persone, avvisale.
 Con il PC in standby, ibernato o spento WinUsage non può ricevere nulla: Telegram conserva i comandi e il PC li esegue
-al risveglio, tranne `/blocca`, `/spegni` e `/sblocca` più vecchi di 2 minuti, che rispondono "comando scaduto".
+al risveglio, tranne `/blocca`, `/spegni`, `/foto` e `/sblocca` più vecchi di 2 minuti, che rispondono "comando scaduto".
 Ogni comando ricevuto, anche rifiutato, compare nella scheda *Registro*.
 
 ### Configurazione
@@ -169,7 +185,7 @@ Ogni comando ricevuto, anche rifiutato, compare nella scheda *Registro*.
 - **Lingua / Language** (dalla 1.6): *Automatica* (italiano se Windows è in italiano, altrimenti inglese), *Italiano* o
   *English*. Vale per finestre, menu, notifiche pixel art e messaggi del bot Telegram; cambiandola WinUsage chiede di
   riavviarsi. I comandi del bot funzionano in tutte e due le lingue (`/blocca` o `/lock`, `/spegni` o `/shutdown`,
-  `/annulla` o `/cancel`, `/stato` o `/status`, `/sblocca` o `/unlock`, `/telefoni` o `/phones`, `/abbina` o
+  `/annulla` o `/cancel`, `/foto` o `/photo`, `/stato` o `/status`, `/sblocca` o `/unlock`, `/telefoni` o `/phones`, `/abbina` o
   `/pair`, `/aiuto` o `/help`); l'aiuto mostra quelli della lingua scelta. L'installer usa la lingua di Windows.
 - Notifica a intervalli regolari: attiva/disattiva e ogni quanti minuti (default 60)
 - Timer Browser: attiva/disattiva e elenco dei processi considerati browser
@@ -177,7 +193,7 @@ Ogni comando ricevuto, anche rifiutato, compare nella scheda *Registro*.
 
 ## Installare
 
-`dist\WinUsage-Setup-1.6.1.exe`: installer per l'utente corrente (nessun permesso di amministratore).
+`dist\WinUsage-Setup-1.7.0.exe`: installer per l'utente corrente (nessun permesso di amministratore).
 Installa in `%LOCALAPPDATA%\Programs\WinUsage`, crea il collegamento nel menu Start e si registra in
 *Impostazioni > App > App installate*. Un aggiornamento chiude da solo la versione in esecuzione (salvando i dati).
 La disinstallazione rimuove app, collegamento e avvio automatico, e chiede se eliminare anche storico e
@@ -269,7 +285,7 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
 
 - Compilato senza errori né avvisi con `mcs -langversion:5`, cioè con il sottoinsieme di C# del compilatore
   integrato in Windows.
-- `tests/run-tests.sh`: 348 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
+- `tests/run-tests.sh`: 405 controlli sulla logica con tempo simulato (soglie, standby con e senza eventi, schermo bloccato,
   cambio utente, mezzanotte, persistenza, storico a 7 e 30 giorni, manutenzione: informazioni, verifica, pulizia,
   compattazione, backup, CSV, azzeramento, conservazione) su SQLite reale. Dalla 1.3 anche il controllo remoto:
   TOTP con i vettori della RFC 6238, Base32, QR, configurazione cifrata e alterata, coda in uscita, spegnimento
@@ -278,12 +294,16 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
   errori, sessione /sblocca, minuti di /spegni, limiti di frequenza, conto alla rovescia e standby. Dalla 1.6.1 anche il
   client Telegram contro un server finto (`tests/FakeTelegram.cs`): la lettura si interrompe anche dopo un invio, un
   invio in corso non viene interrotto, dopo la chiusura nessuna lettura parte più, connessioni nuove dopo un risveglio e
-  per ogni invio, attese tra i tentativi di invio.
+  per ogni invio, attese tra i tentativi di invio. Dalla 1.7 anche `/foto`: codice predefinito e configurabile, alias,
+  numero della fotocamera, una alla volta, intervallo, scadenza, telefono rimosso durante lo scatto, scelta della
+  risoluzione, foto nera, messaggi di errore.
 - Controllo remoto provato da capo a fondo con Mono contro un server Telegram finto (lettura dei messaggi, risposte,
   screenshot inviato in multipart, messaggi di accensione, spegnimento improvviso e spegnimento). Il QR mostrato
   nella finestra *Controllo remoto* è stato decodificato con OpenCV. Dalla 1.6.1 la prova da capo a fondo è nel
   repository: `tests/run-remote-e2e.sh` (14 controlli, circa 30 secondi) fa girare il vero servizio del controllo remoto
   contro il server finto e riproduce i casi in cui la 1.6.0 perdeva i comandi; sulla 1.6.0 fallisce 6 controlli su 14.
+  Dalla 1.7, 23 controlli: anche `/foto` dal vero servizio (scatto in un thread a parte mentre il PC risponde ad altri
+  comandi, `sendPhoto` con didascalia, errore della webcam, fotocamera che non risponde entro 25 secondi).
 - Messaggio di soglia, notifiche del controllo remoto e grafico dello storico disegnati su PNG con Mono e controllati
   a occhio (`docs/`).
 - L'installer si compila senza avvisi con NSIS 3.09.
@@ -313,7 +333,9 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
   PC tenuto sveglio durante il conto alla rovescia, lettura più robusta), i pulsanti *CHIUDI*, la cronologia, la
   risposta rapida e le emoji a colori della chat (DirectWrite, `src/ColorText.cs`: se nel log compare "emoji a colori
   disattivate", l'app è tornata a GDI), più telefoni abbinati (1.5), le correzioni della lettura e degli invii della
-  1.6.1 (provate con Mono contro il server finto, non ancora con .NET Framework su Windows e Telegram vero).
+  1.6.1 (provate con Mono contro il server finto, non ancora con .NET Framework su Windows e Telegram vero), la foto
+  dalla webcam della 1.7 (`src/Webcam.cs`, Media Foundation: con Mono su Linux si prova tutto tranne lo scatto vero;
+  se qualcosa non va il log riporta "Webcam:" con il codice di errore).
   `bin/WinUsage.exe` incluso è stato compilato con Mono. Se qualcosa non va, controlla `winusage.log`.
 
 ## Struttura
@@ -337,6 +359,7 @@ Tutti e tre sono salvati per giorno nel database. Browser e Steam non richiedono
     src/Qr.cs            generatore di QR code (per l'app Authenticator)
     src/RemoteService.cs collega controller, rete (2 thread), azioni, notifiche, chat; messaggi di accensione/spegnimento
     src/RemoteActions.cs app in uso, screenshot, blocco, spegnimento (API di Windows)
+    src/Webcam.cs        foto dalla webcam per /foto (Media Foundation)
     src/NotifyArt.cs     notifiche e badge del conto alla rovescia in pixel art
     src/NotifyForm.cs    finestre delle notifiche, coda con priorità, badge
     src/RemoteSprites.cs sprite 16x16 delle notifiche

@@ -38,6 +38,7 @@ namespace WinUsage
         public TrayContext(string dbPath, bool autostart)
         {
             storage = new Storage(dbPath);
+            L.Init(storage);   // lingua scelta (o quella di Windows): prima di costruire menu e finestre
 
             // Prima esecuzione: salva i valori predefiniti (avvio automatico attivo, notifica ogni ora).
             bool firstRun = storage.GetSetting("initialized", null) == null;
@@ -56,19 +57,19 @@ namespace WinUsage
 
             icon = LoadIcon();
             ContextMenuStrip menu = new ContextMenuStrip();
-            ToolStripMenuItem miHistory = new ToolStripMenuItem("Storico 7 giorni...");
+            ToolStripMenuItem miHistory = new ToolStripMenuItem(L.T("Storico 7 giorni...", "7-day history..."));
             miHistory.Click += delegate { ShowHistory(7); };
-            ToolStripMenuItem miHistory30 = new ToolStripMenuItem("Storico 30 giorni...");
+            ToolStripMenuItem miHistory30 = new ToolStripMenuItem(L.T("Storico 30 giorni...", "30-day history..."));
             miHistory30.Click += delegate { ShowHistory(30); };
-            ToolStripMenuItem miMaintenance = new ToolStripMenuItem("Manutenzione database...");
+            ToolStripMenuItem miMaintenance = new ToolStripMenuItem(L.T("Manutenzione database...", "Database maintenance..."));
             miMaintenance.Click += delegate { ShowMaintenance(); };
-            ToolStripMenuItem miSettings = new ToolStripMenuItem("Configurazione...");
+            ToolStripMenuItem miSettings = new ToolStripMenuItem(L.T("Configurazione...", "Settings..."));
             miSettings.Click += delegate { ShowSettings(); };
-            ToolStripMenuItem miRemote = new ToolStripMenuItem("Controllo remoto (Telegram)...");
+            ToolStripMenuItem miRemote = new ToolStripMenuItem(L.T("Controllo remoto (Telegram)...", "Remote control (Telegram)..."));
             miRemote.Click += delegate { ShowRemoteSettings(); };
-            ToolStripMenuItem miTest = new ToolStripMenuItem("Mostra messaggio di prova");
+            ToolStripMenuItem miTest = new ToolStripMenuItem(L.T("Mostra messaggio di prova", "Show test message"));
             miTest.Click += delegate { ShowToast(tracker.Session(TimerIds.System), false); };
-            ToolStripMenuItem miExit = new ToolStripMenuItem("Esci");
+            ToolStripMenuItem miExit = new ToolStripMenuItem(L.T("Esci", "Exit"));
             miExit.Click += delegate { ExitApp(); };
             menu.Items.Add(miHistory);
             menu.Items.Add(miHistory30);
@@ -108,7 +109,7 @@ namespace WinUsage
             if (!storage.Available)
             {
                 notifyIcon.ShowBalloonTip(8000, "WinUsage",
-                    "Database non disponibile: lo storico non verrà salvato.", ToolTipIcon.Warning);
+                    L.T("Database non disponibile: lo storico non verrà salvato.", "Database not available: history will not be saved."), ToolTipIcon.Warning);
             }
         }
 
@@ -204,7 +205,7 @@ namespace WinUsage
             try
             {
                 notifyIcon.ShowBalloonTip(10000, "WinUsage",
-                    "Stai usando il computer da " + Fmt.Long(seconds), ToolTipIcon.Info);
+                    L.T("Stai usando il computer da ", "You have been using the computer for ") + Fmt.Long(seconds), ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
@@ -222,7 +223,7 @@ namespace WinUsage
             DateTime now = DateTime.UtcNow;
             if (!force && (now - lastTooltipUpdate).TotalSeconds < 1) return;
             lastTooltipUpdate = now;
-            string text = "WinUsage - in uso da " + Fmt.Long(tracker.Session(TimerIds.System));
+            string text = L.T("WinUsage - in uso da ", "WinUsage - in use for ") + Fmt.Long(tracker.Session(TimerIds.System));
             if (text.Length > 63) text = text.Substring(0, 63);   // limite di NotifyIcon.Text
             notifyIcon.Text = text;
         }
@@ -369,11 +370,24 @@ namespace WinUsage
         private void OnSettingsSaved(AppSettings newSettings)
         {
             newSettings.RetentionDays = settings.RetentionDays;   // si modifica dalla finestra di manutenzione
+            bool languageChanged = newSettings.Language != settings.Language &&
+                                   L.ResolveEnglish(newSettings.Language, System.Globalization.CultureInfo.CurrentUICulture) != L.En;
             settings = newSettings;
             browserSet = settings.BrowserSet();
             settings.Save(storage);
             AutoStart.Apply(settings.AutoStart);
             tracker.ApplySettings(settings);
+            if (languageChanged)
+            {
+                // menu e finestre sono già costruiti: la lingua nuova vale dal prossimo avvio (domanda in tutte e due le lingue)
+                if (MessageBox.Show("La lingua cambia al prossimo avvio di WinUsage. Riavviare ora?\r\n\r\n" +
+                                    "The language changes the next time WinUsage starts. Restart now?",
+                                    "WinUsage", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                {
+                    Program.RestartRequested = true;
+                    ExitApp();
+                }
+            }
         }
 
         // ---- alimentazione e sessione ----
